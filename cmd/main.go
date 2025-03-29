@@ -67,7 +67,7 @@ func main() {
 	log.Fatal(router.Run(fmt.Sprintf(":%d", *apiPort)))
 
 	// Load front-end port env variable
-	err := godotenv.Load("../client/agent-launchpad/.env")
+	err := godotenv.Load("../.env")
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
