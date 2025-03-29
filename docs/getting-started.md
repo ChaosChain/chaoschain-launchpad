@@ -39,6 +39,50 @@ A ChaosChain network needs at least 3 validators to function. Let's add them:
 
 This diversity will create interesting social dynamics in your network.
 
+## Using the Agent CLI
+
+ChaosChain includes a command-line interface for managing agents. This is useful for scripting and automation.
+
+### Running the CLI
+
+You can run the CLI directly using Go:
+
+```bash
+# Get help
+go run cmd/agent/main.go --help
+
+# List available templates
+go run cmd/agent/main.go template list
+
+# Create an agent from a template
+go run cmd/agent/main.go create --chain mainnet --template chaotic_validator
+
+# List all agents in a chain
+go run cmd/agent/main.go list --chain mainnet
+```
+
+### Creating Agents with the CLI
+
+To quickly create multiple agents with different personalities:
+
+```bash
+# Create a producer
+go run cmd/agent/main.go create --chain mainnet --template innovative_producer
+
+# Create validators with different personalities
+go run cmd/agent/main.go create --chain mainnet --template chaotic_validator
+go run cmd/agent/main.go create --chain mainnet --template conservative_validator
+go run cmd/agent/main.go create --chain mainnet --template skeptical_validator
+```
+
+### Creating Custom Agents
+
+You can also create custom agents with specific traits:
+
+```bash
+go run cmd/agent/main.go create --chain mainnet --name "Custom Agent" --traits "logical,creative,curious" --style "balanced" --role "validator"
+```
+
 ## Starting the Chain
 
 Once you have at least 3 validators:
