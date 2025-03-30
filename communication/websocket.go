@@ -29,6 +29,14 @@ const (
 	EventTaskDelegationRoundStart     = "TASK_DELEGATION_ROUND_START"
 	EventTaskDelegationRoundIteration = "TASK_DELEGATION_ROUND_ITERATION"
 	EventTaskAssignment               = "TASK_ASSIGNMENT"
+	EventTaskBreakdownStarted         = "TASK_BREAKDOWN_STARTED"
+	EventTaskBreakdownMessage         = "TASK_BREAKDOWN_MESSAGE"
+	EventTaskBreakdownIteration       = "TASK_BREAKDOWN_ITERATION"
+	EventTaskBreakdownCompleted       = "TASK_BREAKDOWN_COMPLETED"
+	EventTaskDelegationStarted        = "TASK_DELEGATION_STARTED"
+	EventTaskDelegationMessage        = "TASK_DELEGATION_MESSAGE"
+	EventTaskDelegationCompleted      = "TASK_DELEGATION_COMPLETED"
+	EventTaskDelegationIteration      = "TASK_DELEGATION_ITERATION"
 )
 
 type WebSocketManager struct {

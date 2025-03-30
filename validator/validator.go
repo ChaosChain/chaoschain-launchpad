@@ -592,3 +592,27 @@ func (v *Validator) ListenForProposals() {
 		v.ProcessProposal(tx)
 	})
 }
+
+// BroadcastTaskDelegation broadcasts a task delegation message to other validators
+func (v *Validator) BroadcastTaskDelegation(task interface{}) {
+	// Convert the task to JSON for broadcasting
+	taskJSON, err := json.Marshal(task)
+	if err != nil {
+		log.Printf("Error marshaling task delegation: %v", err)
+		return
+	}
+
+	// Create a wrapped node for compatibility
+	wrappedNode := p2p.WrapNode(v.P2PNode, v.Name)
+
+	// Create and broadcast the message
+	message := wrappedNode.CreateMessage("task_delegation", map[string]interface{}{
+		"validatorId": v.ID,
+		"name":        v.Name,
+		"content":     string(taskJSON),
+		"timestamp":   time.Now(),
+	})
+
+	wrappedNode.BroadcastMessage(message)
+	log.Printf("Validator %s broadcast task delegation message", v.Name)
+}
