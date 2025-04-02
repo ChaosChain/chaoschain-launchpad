@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/NethermindEth/chaoschain-launchpad/api"
-	"github.com/NethermindEth/chaoschain-launchpad/api/handlers"
 	"github.com/NethermindEth/chaoschain-launchpad/cmd/node"
+	"github.com/NethermindEth/chaoschain-launchpad/registry"
 
 	"github.com/NethermindEth/chaoschain-launchpad/core"
 	cfg "github.com/cometbft/cometbft/config"
@@ -160,7 +160,7 @@ func main() {
 		log.Fatalf("Failed to start node: %v", err)
 	}
 
-	handlers.RegisterNode(*chainID, *nodeID, handlers.NodeInfo{
+	registry.RegisterNode(*chainID, *nodeID, registry.NodeInfo{
 		IsGenesis: true,
 		RPCPort:   *rpcPort,
 		P2PPort:   *p2pPort,

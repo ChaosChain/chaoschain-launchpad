@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -17,10 +18,11 @@ import (
 
 	"github.com/NethermindEth/chaoschain-launchpad/ai"
 	"github.com/NethermindEth/chaoschain-launchpad/cmd/node"
-
 	"github.com/NethermindEth/chaoschain-launchpad/communication"
 	"github.com/NethermindEth/chaoschain-launchpad/core"
 	da "github.com/NethermindEth/chaoschain-launchpad/da_layer"
+	"github.com/NethermindEth/chaoschain-launchpad/registry"
+	"github.com/NethermindEth/chaoschain-launchpad/utils"
 	"github.com/NethermindEth/chaoschain-launchpad/validator"
 	cfg "github.com/cometbft/cometbft/config"
 	"github.com/cometbft/cometbft/p2p"
@@ -45,9 +47,8 @@ func RegisterAgent(c *gin.Context) {
 		return
 	}
 
-	// Just set up the data directory path
-	dataDir := fmt.Sprintf("./data/%s/%s", chainID, agent.ID)
-	// genesisDataDir := fmt.Sprintf("./data/%s/genesis", chainID)
+	// Register agent in registry
+	registry.RegisterAgent(chainID, agent)
 
 	// Assign specific ports based on agent ID
 	basePort := 26656
@@ -58,37 +59,6 @@ func RegisterAgent(c *gin.Context) {
 
 	if p2pPort == 26656 || rpcPort == 26657 {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Agent port conflicts with Genesis node"})
-		return
-	}
-
-	// Create required directories
-	if err := os.MkdirAll(dataDir+"/config", 0755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to create config directory: %v", err)})
-		return
-	}
-	if err := os.MkdirAll(dataDir+"/data", 0755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to create data directory: %v", err)})
-		return
-	}
-
-	// Copy genesis file from genesis node
-	genesisFile := fmt.Sprintf("./data/%s/genesis/config/genesis.json", chainID)
-	if !fileExists(genesisFile) {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Genesis file not found. Is genesis node running?"})
-		return
-	}
-
-	// Read genesis file
-	genesisBytes, err := os.ReadFile(genesisFile)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to read genesis file: %v", err)})
-		return
-	}
-
-	// Write to new node's config directory
-	newGenesisFile := fmt.Sprintf("%s/config/genesis.json", dataDir)
-	if err := os.WriteFile(newGenesisFile, genesisBytes, 0644); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to write genesis file: %v", err)})
 		return
 	}
 
@@ -147,60 +117,9 @@ func RegisterAgent(c *gin.Context) {
 		return
 	}
 
-	// If this is a validator, register it with the consensus engine
-	// if agent.Role == "validator" {
-
-	// 	client, err := rpchttp.New("tcp://localhost:26657", "/websocket") // Use genesis node's RPC port
-	// 	if err == nil {
-	// 		// Load the validator's public key
-	// 		privValKeyFile := fmt.Sprintf("%s/config/priv_validator_key.json", genesisDataDir)
-	// 		if fileExists(privValKeyFile) {
-	// 			privVal := privval.LoadFilePV(privValKeyFile, fmt.Sprintf("%s/data/priv_validator_state.json", genesisDataDir))
-	// 			pubKey, err := privVal.GetPubKey()
-	// 			if err != nil {
-	// 				log.Printf("Failed to get validator public key: %v", err)
-	// 			} else {
-	// 				// Create a transaction to register the validator
-	// 				validatorTx := core.Transaction{
-	// 					Type:      "register_validator",
-	// 					From:      agent.ID,
-	// 					Data:      pubKey.Bytes(),
-	// 					Timestamp: time.Now().Unix(),
-	// 					ChainID:   chainID, // Make sure to set the chain ID
-	// 				}
-
-	// 				// Log the transaction details
-	// 				log.Printf("Creating validator registration transaction: %+v", validatorTx)
-	// 				log.Printf("Validator public key: %X", pubKey.Bytes())
-	// 				log.Printf("Validator address: %X", pubKey.Address())
-
-	// 				// Marshal the transaction
-	// 				txBytes, err := validatorTx.Marshal()
-	// 				if err != nil {
-	// 					log.Printf("Failed to marshal validator registration tx: %v", err)
-	// 				} else {
-	// 					log.Printf("Marshaled transaction length: %d bytes", len(txBytes))
-
-	// 					// Broadcast the transaction to register the validator FROM THE GENESIS NODE
-	// 					result, err := client.BroadcastTxCommit(context.Background(), txBytes)
-	// 					if err != nil {
-	// 						log.Printf("Failed to broadcast validator registration tx: %v", err)
-	// 						c.JSON(http.StatusInternalServerError, gin.H{
-	// 							"error": fmt.Sprintf("Failed to broadcast validator registration tx: %v", err),
-	// 						})
-	// 						return
-	// 					} else {
-	// 						log.Printf("Registered new validator: %s, tx hash: %s, code: %d, log: %s",
-	// 							agent.ID, result.Hash.String(), result.DeliverTx.Code, result.DeliverTx.Log)
-	// 					}
-	// 				}
-	// 			}
-	// 		}
-	// 	}
-	// }
-
-	RegisterNode(chainID, agent.ID, NodeInfo{
+	registry.RegisterNode(chainID, agent.ID, registry.NodeInfo{
 		IsGenesis: false,
+		Name:      agent.ID,
 		P2PPort:   p2pPort,
 		RPCPort:   rpcPort,
 		APIPort:   apiPort,
@@ -227,7 +146,7 @@ func GetBlock(c *gin.Context) {
 	}
 
 	// Connect to the specific chain's node using chainID
-	rpcPort, err := getRPCPortForChain(chainID)
+	rpcPort, err := registry.GetRPCPortForChain(chainID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Chain not found: %v", err)})
 		return
@@ -296,25 +215,45 @@ func GetNetworkStatus(c *gin.Context) {
 func SubmitTransaction(c *gin.Context) {
 	chainID := c.GetString("chainID")
 
+	// Get port from Host header
+	host := c.Request.Host
+	apiPort := ""
+	if i := strings.LastIndex(host, ":"); i != -1 {
+		apiPort = host[i+1:]
+	}
+
+	// Get node info from API port
+	_, nodeInfo, found := registry.GetNodeByAPIPort(chainID, apiPort)
+	if !found {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Node not recognized"})
+		return
+	}
+
 	var tx core.Transaction
 	if err := c.ShouldBindJSON(&tx); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid transaction format"})
 		return
 	}
 
-	// Get RPC port for this chain
-	rpcPort, err := getRPCPortForChain(chainID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Chain not found: %v", err)})
-		return
-	}
+	// Set transaction type and data
+	tx.Type = "discuss_transaction"
 
-	// Connect to the node
-	client, err := rpchttp.New(fmt.Sprintf("tcp://localhost:%d", rpcPort), "/websocket")
+	// Connect to local RPC endpoint to get validator's public key
+	client, err := rpchttp.New(fmt.Sprintf("tcp://localhost:%d", nodeInfo.RPCPort), "/websocket")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to connect to node: %v", err)})
 		return
 	}
+
+	// Get validator's public key
+	status, err := client.Status(context.Background())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get node status: %v", err)})
+		return
+	}
+
+	log.Printf("This is the status %+v", status)
+	tx.Data = status.ValidatorInfo.PubKey.Bytes()
 
 	// Encode transaction
 	txBytes, err := tx.Marshal()
@@ -323,7 +262,9 @@ func SubmitTransaction(c *gin.Context) {
 		return
 	}
 
-	// Broadcast transaction
+	log.Printf("Submitting transaction to CometBFT %+v", tx)
+
+	// Submit transaction to CometBFT
 	result, err := client.BroadcastTxSync(context.Background(), txBytes)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to broadcast tx: %v", err)})
@@ -342,38 +283,41 @@ func SubmitTransaction(c *gin.Context) {
 func GetValidators(c *gin.Context) {
 	chainID := c.GetString("chainID")
 
-	// Get RPC port for this chain
-	rpcPort, err := getRPCPortForChain(chainID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Chain not found: %v", err)})
+	// Get port from Host header
+	host := c.Request.Host
+	apiPort := ""
+	if i := strings.LastIndex(host, ":"); i != -1 {
+		apiPort = host[i+1:]
+	}
+
+	// Get node info from API port
+	_, nodeInfo, found := registry.GetNodeByAPIPort(chainID, apiPort)
+	if !found {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error":   fmt.Sprintf("Node not recognized for port %s", apiPort),
+			"chainID": chainID,
+			"apiPort": apiPort,
+		})
 		return
 	}
 
-	// Connect to the node
-	client, err := rpchttp.New(fmt.Sprintf("tcp://localhost:%d", rpcPort), "/websocket")
+	log.Printf("This is the node info %+v", nodeInfo)
+
+	// Connect to the node using its RPC port
+	client, err := rpchttp.New(fmt.Sprintf("tcp://localhost:%d", nodeInfo.RPCPort), "/websocket")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to connect to node: %v", err)})
 		return
 	}
 
 	// Get validators from CometBFT
-	heightPtr := new(int64) // nil for latest height
-	result, err := client.Validators(context.Background(), heightPtr, nil, nil)
+	result, err := client.Validators(context.Background(), nil, nil, nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get validators: %v", err)})
 		return
 	}
 
-	// Transform validator data
-	validators := make([]gin.H, len(result.Validators))
-	for i, v := range result.Validators {
-		validators[i] = gin.H{
-			"address":          v.Address,
-			"pubKey":           v.PubKey,
-			"votingPower":      v.VotingPower,
-			"proposerPriority": v.ProposerPriority,
-		}
-	}
+	validators := result.Validators
 
 	c.JSON(http.StatusOK, gin.H{"validators": validators})
 }
@@ -383,8 +327,8 @@ func GetSocialStatus(c *gin.Context) {
 	agentID := c.Param("agentID")
 	chainID := c.GetString("chainID")
 
-	// Get consensus validator info from CometBFT
-	rpcPort, err := getRPCPortForChain(chainID)
+	// Get consensus validator info from CometBF`T
+	rpcPort, err := registry.GetRPCPortForChain(chainID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Chain not found: %v", err)})
 		return
@@ -500,53 +444,6 @@ func loadSampleAgents(genesisPrompt string) ([]core.Agent, error) {
 	return agents, nil
 }
 
-// TODO: Implement this
-// func registerAgent(chainID string, agent core.Agent, bootstrapPort int) error {
-// 	// Create a new node for this agent
-// 	newPort := findAvailablePort()
-// 	agentNode := node.NewNode(node.NodeConfig{
-// 		ChainConfig: p2p.ChainConfig{
-// 			ChainID: chainID,
-// 			P2PPort: newPort,
-// 			APIPort: findAvailableAPIPort(),
-// 		},
-// 		BootstrapNode: fmt.Sprintf("localhost:%d", bootstrapPort),
-// 	})
-
-// 	if err := agentNode.Start(); err != nil {
-// 		return fmt.Errorf("failed to start agent node: %v", err)
-// 	}
-
-// 	// Register the new node with the chain
-// 	chain := core.GetChain(chainID)
-// 	addr := fmt.Sprintf("localhost:%d", newPort)
-// 	chain.RegisterNode(addr, agentNode.GetP2PNode())
-
-// 	if agent.Role == "validator" {
-// 		validatorInstance := validator.NewValidator(
-// 			agent.ID,
-// 			agent.Name,
-// 			agent.Traits,
-// 			agent.Style,
-// 			agent.Influences,
-// 			agentNode.GetP2PNode(),
-// 		)
-
-// 		// Register validator
-// 		registry.RegisterValidator(chainID, agent.ID, validatorInstance)
-
-// 		// Broadcast WebSocket event
-// 		communication.BroadcastEvent(communication.EventAgentRegistered, map[string]interface{}{
-// 			"agent":     agent,
-// 			"chainId":   chainID,
-// 			"nodePort":  newPort,
-// 			"timestamp": time.Now(),
-// 		})
-// 	}
-
-// 	return nil
-// }
-
 // CreateChain creates a new blockchain instance
 func CreateChain(c *gin.Context) {
 	var req CreateChainRequest
@@ -556,7 +453,7 @@ func CreateChain(c *gin.Context) {
 	}
 
 	// Check if chain already exists in our registry
-	if _, err := getRPCPortForChain(req.ChainID); err == nil {
+	if _, err := registry.GetRPCPortForChain(req.ChainID); err == nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "Chain already exists"})
 		return
 	}
@@ -612,14 +509,14 @@ func CreateChain(c *gin.Context) {
 	// Initialize validator key files
 	privValKeyFile := config.PrivValidatorKeyFile()
 	privValStateFile := config.PrivValidatorStateFile()
-	if !fileExists(privValKeyFile) {
+	if !utils.FileExists(privValKeyFile) {
 		privVal := privval.GenFilePV(privValKeyFile, privValStateFile)
 		privVal.Save()
 	}
 
 	// Initialize node key file
 	nodeKeyFile := config.NodeKeyFile()
-	if !fileExists(nodeKeyFile) {
+	if !utils.FileExists(nodeKeyFile) {
 		if _, err := p2p.LoadOrGenNodeKey(nodeKeyFile); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to generate node key: %v", err)})
 			return
@@ -628,7 +525,7 @@ func CreateChain(c *gin.Context) {
 
 	// Initialize genesis.json if it doesn't exist
 	genesisFile := config.GenesisFile()
-	if !fileExists(genesisFile) {
+	if !utils.FileExists(genesisFile) {
 		// Get the validator's public key
 		privVal := privval.LoadFilePV(privValKeyFile, privValStateFile)
 		pubKey, err := privVal.GetPubKey()
@@ -676,8 +573,9 @@ func CreateChain(c *gin.Context) {
 	}
 
 	// Register chain in our registry
-	RegisterNode(req.ChainID, "genesis", NodeInfo{
+	registry.RegisterNode(req.ChainID, "genesis", registry.NodeInfo{
 		IsGenesis: true,
+		Name:      "genesis",
 		RPCPort:   func() int { p, _ := strconv.Atoi(config.RPC.ListenAddress[10:]); return p }(),
 		P2PPort:   func() int { p, _ := strconv.Atoi(config.P2P.ListenAddress[10:]); return p }(),
 	})
@@ -735,11 +633,6 @@ func validatorExists(validators []*types.Validator, agentID string) bool {
 		}
 	}
 	return false
-}
-
-func fileExists(filename string) bool {
-	_, err := os.Stat(filename)
-	return !os.IsNotExist(err)
 }
 
 // GetBlockDiscussions returns the discussions for a specific block by hash
@@ -906,4 +799,15 @@ func AddValidatorToGenesis(chainID string, agent core.Agent) bool {
 	}
 
 	return true
+}
+
+// GetAllAgents returns all registered agents for a chain
+func GetAllAgents(c *gin.Context) {
+	chainID := c.GetString("chainID")
+
+	agents := registry.GetAllAgents(chainID)
+
+	c.JSON(http.StatusOK, gin.H{
+		"agents": agents,
+	})
 }

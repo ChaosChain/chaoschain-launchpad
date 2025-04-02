@@ -5,13 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 
+	"github.com/NethermindEth/chaoschain-launchpad/ai"
 	"github.com/NethermindEth/chaoschain-launchpad/core"
-	"github.com/NethermindEth/chaoschain-launchpad/validator"
+	"github.com/NethermindEth/chaoschain-launchpad/registry"
+	"github.com/NethermindEth/chaoschain-launchpad/utils"
 	types "github.com/cometbft/cometbft/abci/types"
 	"github.com/cometbft/cometbft/crypto"
 	"github.com/cometbft/cometbft/crypto/ed25519"
+	"github.com/cometbft/cometbft/privval"
 	tmproto "github.com/cometbft/cometbft/proto/tendermint/types"
 )
 
@@ -25,9 +29,10 @@ type Application struct {
 
 func NewApplication(chainID string) types.Application {
 	return &Application{
-		chainID:     chainID,
-		discussions: make(map[string]map[string]bool),
-		validators:  make([]types.ValidatorUpdate, 0),
+		chainID:           chainID,
+		discussions:       make(map[string]map[string]bool),
+		validators:        make([]types.ValidatorUpdate, 0),
+		pendingValUpdates: make([]types.ValidatorUpdate, 0),
 	}
 }
 
@@ -103,7 +108,7 @@ func (app *Application) DeliverTx(req types.RequestDeliverTx) types.ResponseDeli
 		}
 	}
 
-	log.Printf("Processing transaction: %+v", tx)
+	log.Printf("Delivering transaction: %+v", tx)
 
 	// Handle different transaction types
 	switch tx.Type {
@@ -124,13 +129,25 @@ func (app *Application) DeliverTx(req types.RequestDeliverTx) types.ResponseDeli
 
 		log.Printf("Registered validator %s with pubkey %X", tx.From, tx.Data)
 
+		validatorAddr := fmt.Sprintf("%X", pubKey.Address())
+		if ok := registry.LinkAgentToValidator(app.chainID, tx.From, validatorAddr); !ok {
+			log.Printf("Warning: Failed to link agent %s to validator %s", tx.From, validatorAddr)
+		}
+
 		return types.ResponseDeliverTx{
 			Code: 0,
 			Log:  fmt.Sprintf("Validator %s registered successfully", tx.From),
 		}
 
+	case "discuss_transaction":
+		// Accept all discussion transactions by default
+		log.Printf("Accepted discussion from validator %s", tx.From)
+		return types.ResponseDeliverTx{
+			Code: 0,
+			Log:  fmt.Sprintf("Discussion accepted from %s", tx.From),
+		}
+
 	default:
-		// Handle other transaction types
 		return types.ResponseDeliverTx{Code: 0}
 	}
 }
@@ -145,7 +162,7 @@ func (app *Application) EndBlock(req types.RequestEndBlock) types.ResponseEndBlo
 
 	log.Printf("EndBlock at height %d — %d new validator updates", req.Height, len(app.pendingValUpdates))
 
-	// Log each validator update in detail
+	// Log validator updates
 	for i, update := range app.pendingValUpdates {
 		log.Printf("Validator update %d: pubkey=%X, power=%d",
 			i, update.PubKey.GetEd25519(), update.Power)
@@ -153,9 +170,6 @@ func (app *Application) EndBlock(req types.RequestEndBlock) types.ResponseEndBlo
 
 	updates := app.pendingValUpdates
 	app.pendingValUpdates = nil // Clear for next block
-
-	// Log the response we're returning
-	log.Printf("Returning %d validator updates in EndBlock response", len(updates))
 
 	return types.ResponseEndBlock{
 		ValidatorUpdates: updates,
@@ -184,8 +198,6 @@ func (app *Application) ApplySnapshotChunk(req types.RequestApplySnapshotChunk) 
 
 // PrepareProposal is called when this validator is the proposer
 func (app *Application) PrepareProposal(req types.RequestPrepareProposal) types.ResponsePrepareProposal {
-	// TODO: Implement PrepareProposal
-
 	log.Printf("PrepareProposal called with %d transactions", len(req.Txs))
 
 	app.mu.Lock()
@@ -193,50 +205,27 @@ func (app *Application) PrepareProposal(req types.RequestPrepareProposal) types.
 
 	var validTxs [][]byte
 	for _, tx := range req.Txs {
-		// Decode transaction
 		var transaction core.Transaction
 		if err := json.Unmarshal(tx, &transaction); err != nil {
+			log.Printf("Failed to unmarshal transaction: %v", err)
 			continue
 		}
 
-		// Always include validator registration txs
 		if transaction.Type == "register_validator" {
 			log.Printf("Including validator registration tx from %s", transaction.From)
 			validTxs = append(validTxs, tx)
 			continue
 		}
 
-		log.Printf("PrepareProposal including %d txs", len(validTxs))
-
-		// Get social validator info
-		proposer := validator.GetSocialValidator(app.chainID, fmt.Sprintf("%X", req.ProposerAddress))
-		if proposer == nil {
-			continue
-		}
-
-		// Initialize discussion for this tx if not exists
-		txHash := fmt.Sprintf("%x", tx)
-		if _, exists := app.discussions[txHash]; !exists {
-			app.discussions[txHash] = make(map[string]bool)
-		}
-
-		// AI agent (proposer) evaluates transaction based on relationships
-		support := true // Default support
-		// for _, relatedValidator := range validator.GetAllValidators(app.chainID) {
-		// 	relationship := proposer.Relationships[relatedValidator.ID]
-		// 	// If strongly influenced by a validator, consider their opinion
-		// 	if relationship > 0.7 || relationship < -0.7 {
-		// 		// Simulate related validator's opinion based on relationship
-		// 		app.discussions[txHash][relatedValidator.ID] = relationship > 0
-		// 	}
-		// }
-
-		// Record proposer's decision
-		app.discussions[txHash][proposer.ID] = support
-
-		// Add transaction if supported
-		if support {
-			validTxs = append(validTxs, tx)
+		if transaction.Type == "discuss_transaction" {
+			// Accept any discussion transaction that has content
+			if transaction.Content != "" {
+				log.Printf("Including discussion tx from %s with content: %s",
+					transaction.From, transaction.Content)
+				validTxs = append(validTxs, tx)
+			} else {
+				log.Printf("Rejecting empty discussion tx from %s", transaction.From)
+			}
 		}
 	}
 
@@ -248,7 +237,76 @@ func (app *Application) ProcessProposal(req types.RequestProcessProposal) types.
 	app.mu.Lock()
 	defer app.mu.Unlock()
 
-	// Always accept proposals during development
+	log.Printf("ProcessProposal called with %d transactions at height %d",
+		len(req.Txs), req.Height)
+
+	// We need to get the current validator's address, not the proposer's
+	// This requires accessing the private validator key
+	privValKeyFile := fmt.Sprintf("./data/%s/%s/config/priv_validator_key.json",
+		app.chainID, os.Getenv("AGENT_ID"))
+	privValStateFile := fmt.Sprintf("./data/%s/%s/data/priv_validator_state.json",
+		app.chainID, os.Getenv("AGENT_ID"))
+
+	if utils.FileExists(privValKeyFile) && utils.FileExists(privValStateFile) {
+		privVal := privval.LoadFilePV(privValKeyFile, privValStateFile)
+		pubKey, err := privVal.GetPubKey()
+		if err == nil {
+			currentValidatorAddr := fmt.Sprintf("%X", pubKey.Address())
+			log.Printf("Current validator address: %s", currentValidatorAddr)
+
+			// Get current validator's agent info
+			currentAgent, exists := registry.GetAgentByValidator(app.chainID, currentValidatorAddr)
+			if exists {
+				log.Printf("Found agent %s for current validator", currentAgent.Name)
+
+				// Process transactions with this validator's agent
+				for i, tx := range req.Txs {
+					var transaction core.Transaction
+					if err := json.Unmarshal(tx, &transaction); err != nil {
+						log.Printf("Failed to unmarshal transaction %d: %v", i, err)
+						continue
+					}
+
+					log.Printf("Processing transaction %d: Type=%s, From=%s",
+						i, transaction.Type, transaction.From)
+
+					if transaction.Type == "discuss_transaction" {
+						// Get current validator's discussion response
+						discussion := ai.GetValidatorDiscussion(currentAgent, transaction)
+						log.Printf("Got discussion response from agent %s: Support=%v",
+							currentAgent.Name, discussion.Support)
+
+						// Log the discussion
+						utils.LogDiscussion(currentAgent.Name, discussion.Message, app.chainID, false)
+
+						// Accept proposal only if current validator supports it
+						if !discussion.Support {
+							log.Printf("Current validator %s does not support the discussion: %s",
+								currentAgent.Name, discussion.Message)
+							return types.ResponseProcessProposal{Status: types.ResponseProcessProposal_REJECT}
+						}
+
+						log.Printf("Current validator %s supports the discussion: %s",
+							currentAgent.Name, discussion.Message)
+					}
+				}
+			} else {
+				log.Printf("No agent found for current validator %s", currentValidatorAddr)
+
+				// List all registered validator-agent mappings for debugging
+				log.Printf("Registered validator-agent mappings for chain %s:", app.chainID)
+				mappings := registry.GetAllValidatorAgentMappings(app.chainID)
+				for valAddr, agentID := range mappings {
+					log.Printf("  Validator %s -> Agent %s", valAddr, agentID)
+				}
+			}
+		} else {
+			log.Printf("Failed to get validator public key: %v", err)
+		}
+	} else {
+		log.Printf("Validator key files not found: %s, %s", privValKeyFile, privValStateFile)
+	}
+
 	return types.ResponseProcessProposal{Status: types.ResponseProcessProposal_ACCEPT}
 }
 

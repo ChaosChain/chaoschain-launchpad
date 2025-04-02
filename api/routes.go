@@ -48,6 +48,7 @@ func SetupRoutes(router *gin.Engine, chainID string) {
 		api.POST("/validators/:agentID/influences", handlers.AddInfluence)
 		api.POST("/validators/:agentID/relationships", handlers.UpdateRelationship)
 		api.GET("/forum/threads", handlers.GetAllThreads)
+		api.GET("/agents", handlers.GetAllAgents)
 		blockGroup := api.Group("/blocks")
 		{
 			blockGroup.GET("/discussions/:blockHash", handlers.GetBlockDiscussions)

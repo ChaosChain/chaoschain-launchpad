@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/NethermindEth/chaoschain-launchpad/api"
-	"github.com/NethermindEth/chaoschain-launchpad/api/handlers"
 	"github.com/NethermindEth/chaoschain-launchpad/cmd/node"
 	"github.com/NethermindEth/chaoschain-launchpad/core"
+	"github.com/NethermindEth/chaoschain-launchpad/registry"
 	"github.com/NethermindEth/chaoschain-launchpad/utils"
 	cfg "github.com/cometbft/cometbft/config"
 	"github.com/cometbft/cometbft/p2p"
@@ -118,12 +118,12 @@ func main() {
 		validatorTx := core.Transaction{
 			Type:      "register_validator",
 			From:      *agentID,
-			To:        "", // not used for validator registration
-			Amount:    0,  // not used here
-			Fee:       0,  // optional
-			Content:   "", // optional or leave as-is
+			To:        "",
+			Amount:    0,
+			Fee:       0,
+			Content:   "",
 			Timestamp: time.Now().Unix(),
-			Signature: "", // not signing yet
+			Signature: "",
 			PublicKey: "", // optional: could be base64.StdEncoding.EncodeToString(pubKey.Bytes())
 			ChainID:   *chainID,
 			Hash:      nil,
@@ -164,8 +164,9 @@ func main() {
 	}
 
 	// Register node in handlers
-	handlers.RegisterNode(*chainID, *agentID, handlers.NodeInfo{
+	registry.RegisterNode(*chainID, *agentID, registry.NodeInfo{
 		IsGenesis: false,
+		Name:      *agentID,
 		RPCPort:   *rpcPort,
 		P2PPort:   *p2pPort,
 		APIPort:   actualAPIPort,
