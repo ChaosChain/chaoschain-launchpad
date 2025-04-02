@@ -257,7 +257,6 @@ func (app *Application) ProcessProposal(req types.RequestProcessProposal) types.
 			// Get current validator's agent info
 			currentAgent, exists := registry.GetAgentByValidator(app.chainID, currentValidatorAddr)
 			if exists {
-				log.Printf("Found agent %s for current validator", currentAgent.Name)
 
 				// Process transactions with this validator's agent
 				for i, tx := range req.Txs {
@@ -273,32 +272,19 @@ func (app *Application) ProcessProposal(req types.RequestProcessProposal) types.
 					if transaction.Type == "discuss_transaction" {
 						// Get current validator's discussion response
 						discussion := ai.GetValidatorDiscussion(currentAgent, transaction)
-						log.Printf("Got discussion response from agent %s: Support=%v",
-							currentAgent.Name, discussion.Support)
 
 						// Log the discussion
 						utils.LogDiscussion(currentAgent.Name, discussion.Message, app.chainID, false)
 
 						// Accept proposal only if current validator supports it
 						if !discussion.Support {
-							log.Printf("Current validator %s does not support the discussion: %s",
-								currentAgent.Name, discussion.Message)
 							return types.ResponseProcessProposal{Status: types.ResponseProcessProposal_REJECT}
 						}
 
-						log.Printf("Current validator %s supports the discussion: %s",
-							currentAgent.Name, discussion.Message)
 					}
 				}
 			} else {
 				log.Printf("No agent found for current validator %s", currentValidatorAddr)
-
-				// List all registered validator-agent mappings for debugging
-				log.Printf("Registered validator-agent mappings for chain %s:", app.chainID)
-				mappings := registry.GetAllValidatorAgentMappings(app.chainID)
-				for valAddr, agentID := range mappings {
-					log.Printf("  Validator %s -> Agent %s", valAddr, agentID)
-				}
 			}
 		} else {
 			log.Printf("Failed to get validator public key: %v", err)

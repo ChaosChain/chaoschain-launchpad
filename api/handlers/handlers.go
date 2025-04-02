@@ -262,8 +262,6 @@ func SubmitTransaction(c *gin.Context) {
 		return
 	}
 
-	log.Printf("Submitting transaction to CometBFT %+v", tx)
-
 	// Submit transaction to CometBFT
 	result, err := client.BroadcastTxSync(context.Background(), txBytes)
 	if err != nil {

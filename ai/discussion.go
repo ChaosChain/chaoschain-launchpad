@@ -3,7 +3,6 @@ package ai
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -27,8 +26,6 @@ func GetValidatorDiscussion(agent core.Agent, tx core.Transaction) Discussion {
 	if !agent.IsValidator {
 		return Discussion{}
 	}
-
-	log.Printf("CALLING THE AI FUNCTION FOR %s", agent.Name)
 
 	prompt := fmt.Sprintf(`You are %s, with these traits: %v.
 
