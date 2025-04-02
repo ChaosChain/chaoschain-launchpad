@@ -37,6 +37,7 @@ const (
 	EventTaskDelegationMessage        = "TASK_DELEGATION_MESSAGE"
 	EventTaskDelegationCompleted      = "TASK_DELEGATION_COMPLETED"
 	EventTaskDelegationIteration      = "TASK_DELEGATION_ITERATION"
+	EventStrategySelected             = "STRATEGY_SELECTED"
 )
 
 type WebSocketManager struct {

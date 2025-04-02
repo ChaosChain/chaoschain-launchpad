@@ -7,6 +7,7 @@ import { FiArrowLeft } from "react-icons/fi";
 import { useEffect, useState, useRef } from "react";
 import { wsService } from "@/services/websocket";
 import { fetchValidators, proposeBlock } from "@/services/api";
+import { TaskBreakdownPanel } from "@/app/forum/TaskBreakdownPanel";
 
 interface AgentVote {
     validatorId: string;
@@ -80,6 +81,9 @@ export default function ThreadDetailPage() {
     fee: parseInt(searchParams.get('fee') || '0'),
     timestamp: parseInt(searchParams.get('timestamp') || '0')
   };
+
+  // Add state for showing task breakdown
+  const [showTaskBreakdown, setShowTaskBreakdown] = useState(false);
 
   useEffect(() => {
     // Only connect if not already connected
@@ -226,55 +230,89 @@ export default function ThreadDetailPage() {
             <div>Fee: {transaction.fee || 0}</div>
             <div>To: {validators[transaction.to || ''] || 'Loading...'}</div>
             <div>Time: {transaction ? new Date(transaction.timestamp * 1000).toLocaleString() : 'Loading...'}</div>
+            <div>hellooooo</div>
+          </div>
+          
+          {/* Task toggle button */}
+          <div className="mt-4 flex justify-end">
+            <button
+              onClick={() => setShowTaskBreakdown(!showTaskBreakdown)}
+              className="px-6 py-3 bg-[#fd7653] text-white rounded-lg hover:bg-[#fe6a23] transition-colors text-lg font-bold border-2 border-white"
+            >
+              {showTaskBreakdown ? 'Hide Task Breakdown' : 'Show Task Breakdown'}
+            </button>
           </div>
         </div>
 
+        {/* Task Breakdown Status */}
+        <div className="mt-4 bg-gray-800 p-4 rounded-lg">
+          <h3 className="text-xl font-bold text-green-400">Debug - Task Breakdown Status</h3>
+          <p>Toggle Button: {showTaskBreakdown ? 'Showing' : 'Hidden'}</p>
+          <p>Voting Result: {votingResult ? 'Available' : 'Not available'}</p>
+          <p>Panel Visible: {(showTaskBreakdown || votingResult) ? 'Yes' : 'No'}</p>
+          <div className="mt-2">
+            <button
+              onClick={() => setShowTaskBreakdown(true)}
+              className="px-4 py-2 bg-green-500 text-white rounded-lg mr-2"
+            >
+              Force Show
+            </button>
+            <button
+              onClick={() => setShowTaskBreakdown(false)}
+              className="px-4 py-2 bg-red-500 text-white rounded-lg"
+            >
+              Force Hide
+            </button>
+          </div>
+        </div>
+        
+
         {/* Discussion Rounds */}
         <div className="mt-8">
-            <h2 className="text-2xl font-bold mb-4">Discussion Rounds</h2>
-            {[...Array(5)].map((_, roundIndex) => (
-                <div key={roundIndex} className="mb-8">
-                    <h3 className="text-xl font-semibold mb-4">Round {roundIndex + 1}</h3>
-                    <div className="space-y-4">
-                        {replies
-                            .filter(reply => reply.round === roundIndex + 1)
-                            .map((reply, index) => (
-                                <div key={`${reply.validatorId}-${index}`} 
-                                     className="bg-gray-800 p-6 rounded-lg shadow-lg">
-                                    <div className="flex items-center justify-between">
-                                        <div className="flex items-center space-x-4">
-                                            <img
-                                                src={`https://robohash.org/${reply.validatorId}?size=50x50`}
-                                                alt={validators[reply.validatorId] || reply.validatorId}
-                                                className="w-12 h-12 rounded-full border-2 border-indigo-500"
-                                            />
-                                            <div>
-                                                <p className="font-bold text-lg">
-                                                    {validators[reply.validatorId] || `Validator ${reply.validatorId.slice(0, 8)}`}
-                                                </p>
-                                                <p className="text-sm text-gray-400">
-                                                    {new Date(reply.timestamp).toLocaleString()}
-                                                </p>
-                                            </div>
-                                        </div>
-                                        <div className={`px-4 py-2 rounded-full text-sm font-semibold ${
-                                            reply.type.toLowerCase() === 'support' 
-                                                ? 'bg-emerald-500 bg-opacity-20 border-2 border-emerald-500 text-white' 
-                                                : reply.type.toLowerCase() === 'oppose'
-                                                ? 'bg-rose-500 bg-opacity-20 border-2 border-rose-500 text-white'
-                                                : 'bg-yellow-500 bg-opacity-20 border border-yellow-500 text-white'
-                                        }`}>
-                                            {reply.type.toUpperCase()}
+          <h2 className="text-2xl font-bold mb-4">Agent Discussion</h2>
+          {[...Array(5)].map((_, roundIndex) => (
+            <div key={roundIndex} className="mb-8">
+                <h3 className="text-xl font-semibold mb-4">Round {roundIndex + 1}</h3>
+                <div className="space-y-4">
+                    {replies
+                        .filter(reply => reply.round === roundIndex + 1)
+                        .map((reply, index) => (
+                            <div key={`${reply.validatorId}-${index}`} 
+                                 className="bg-gray-800 p-6 rounded-lg shadow-lg">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center space-x-4">
+                                        <img
+                                            src={`https://robohash.org/${reply.validatorId}?size=50x50`}
+                                            alt={validators[reply.validatorId] || reply.validatorId}
+                                            className="w-12 h-12 rounded-full border-2 border-indigo-500"
+                                        />
+                                        <div>
+                                            <p className="font-bold text-lg">
+                                                {validators[reply.validatorId] || `Validator ${reply.validatorId.slice(0, 8)}`}
+                                            </p>
+                                            <p className="text-sm text-gray-400">
+                                                {new Date(reply.timestamp).toLocaleString()}
+                                            </p>
                                         </div>
                                     </div>
-                                    <div className="mt-4 text-gray-300 whitespace-pre-line">
-                                        {formatMessageWithMentions(reply.message)}
+                                    <div className={`px-4 py-2 rounded-full text-sm font-semibold ${
+                                        reply.type.toLowerCase() === 'support' 
+                                            ? 'bg-emerald-500 bg-opacity-20 border-2 border-emerald-500 text-white' 
+                                            : reply.type.toLowerCase() === 'oppose'
+                                            ? 'bg-rose-500 bg-opacity-20 border-2 border-rose-500 text-white'
+                                            : 'bg-yellow-500 bg-opacity-20 border border-yellow-500 text-white'
+                                    }`}>
+                                        {reply.type.toUpperCase()}
                                     </div>
                                 </div>
-                            ))}
-                    </div>
+                                <div className="mt-4 text-gray-300 whitespace-pre-line">
+                                    {formatMessageWithMentions(reply.message)}
+                                </div>
+                            </div>
+                        ))}
                 </div>
-            ))}
+            </div>
+          ))}
         </div>
 
         {/* Voting Result */}
@@ -298,6 +336,18 @@ export default function ThreadDetailPage() {
               {JSON.stringify(blockVerdict, null, 2)}
             </pre>
           </div>
+        )}
+
+         {/* Task Breakdown Panel */}
+         {(showTaskBreakdown || votingResult) && (
+          (() => {
+            console.log("Rendering TaskBreakdownPanel with blockHeight:", votingResult?.blockHeight);
+            return (
+              <div className="mt-8">
+                <TaskBreakdownPanel chainId={chainId} blockHeight={votingResult?.blockHeight} />
+              </div>
+            );
+          })()
         )}
       </div>
     </>

@@ -144,6 +144,7 @@ func RegisterAgent(c *gin.Context) {
 			agent.Influences,
 			agentNode.GetP2PNode(),
 			chain.GenesisPrompt,
+			chainID,
 		)
 
 		// Register on the agent's node
@@ -741,6 +742,7 @@ func registerAgent(chainID string, agent core.Agent, bootstrapPort int) error {
 			agent.Influences,
 			agentNode.GetP2PNode(),
 			chain.GenesisPrompt,
+			chainID,
 		)
 
 		// Register validator
@@ -953,45 +955,96 @@ func ListBlockDiscussions(c *gin.Context) {
 
 // SubmitTask initiates task delegation discussion among validators
 func SubmitTask(c *gin.Context) {
-	chainID := c.Param("chainId")
-	var taskRequest struct {
-		Content string `json:"content"`
+	var request struct {
+		ChainID string `json:"chain_id" binding:"required"`
+		Task    string `json:"task" binding:"required"`
 	}
-
-	if err := c.BindJSON(&taskRequest); err != nil {
+	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Create task message
-	task := validator.TaskMessage{
-		Content:     taskRequest.Content,
-		Timestamp:   time.Now(),
-		InitiatorID: c.GetString("initiator_id"), // If available from auth middleware
-	}
-
-	// Get chain
-	chain := core.GetChain(chainID)
-	if chain == nil {
+	// Create a transaction for the task
+	bc := core.GetChain(request.ChainID)
+	if bc == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Chain not found"})
 		return
 	}
 
-	// Broadcast to all validators through validators in the chain
-	validators := validator.GetAllValidators(chainID)
-	if len(validators) == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "No validators found for this chain"})
+	// Create a block with this transaction
+	tx := core.Transaction{
+		From:      "system",
+		To:        "validators",
+		Content:   request.Task,
+		Timestamp: time.Now().Unix(),
+		ChainID:   request.ChainID,
+		Type:      "TASK_BREAKDOWN",
+	}
+
+	// Create a block with this transaction for collaborative breakdown
+	block := &core.Block{
+		Height:    bc.Blocks[len(bc.Blocks)-1].Height + 1,
+		PrevHash:  bc.Blocks[len(bc.Blocks)-1].Hash(),
+		Txs:       []core.Transaction{tx},
+		Timestamp: time.Now().Unix(),
+		Proposer:  "system",
+		ChainID:   request.ChainID,
+	}
+
+	// Get all validators to update their memory with the current block
+	validators := validator.GetAllValidators(request.ChainID)
+	for _, v := range validators {
+		if v.Memory != nil {
+			v.Memory.SetCurrentBlock(block)
+		}
+	}
+
+	// Start collaborative task breakdown process
+	log.Printf("Starting collaborative task breakdown process for task: %s", request.Task)
+	breakdownResults := StartCollaborativeTaskBreakdown(request.ChainID, block, request.Task)
+
+	if breakdownResults == nil || len(breakdownResults.FinalSubtasks) == 0 {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to break down the task",
+		})
 		return
 	}
 
-	// Send the task to each validator
-	for _, v := range validators {
-		v.BroadcastTaskDelegation(task)
+	// Start collaborative task delegation process
+	log.Printf("Starting collaborative task delegation process for %d subtasks", len(breakdownResults.FinalSubtasks))
+	delegationResults := StartCollaborativeTaskDelegation(request.ChainID, breakdownResults)
+
+	if delegationResults == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to delegate tasks",
+		})
+		return
+	}
+
+	// Notify assigned validators
+	NotifyAssignedValidators(request.ChainID, delegationResults)
+
+	// Add metrics about decision strategy used
+	decisionMetrics := map[string]interface{}{
+		"breakdown_strategy":  breakdownResults.SelectedStrategy.Name,
+		"delegation_strategy": delegationResults.Strategy.Name,
+		"consensus_score":     breakdownResults.ConsensusScore,
+		"total_subtasks":      len(breakdownResults.FinalSubtasks),
+		"validators_involved": len(validators),
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message": "Task submitted for delegation discussion",
-		"task_id": task.Timestamp.Unix(), // Using timestamp as a simple task identifier
+		"message": "Task submitted and delegated successfully",
+		"breakdown_results": gin.H{
+			"subtasks":        breakdownResults.FinalSubtasks,
+			"strategy":        breakdownResults.SelectedStrategy.Name,
+			"consensus_score": breakdownResults.ConsensusScore,
+		},
+		"delegation_results": gin.H{
+			"assignments": delegationResults.Assignments,
+			"strategy":    delegationResults.Strategy.Name,
+		},
+		"metrics": decisionMetrics,
 	})
 }
 
@@ -1080,16 +1133,19 @@ func ProposeRewardDistribution(c *gin.Context) {
 
 // StartCollaborativeTaskBreakdown starts a collaborative task breakdown process
 func StartCollaborativeTaskBreakdown(chainID string, block *core.Block, transactionDetails string) *validator.TaskBreakdownResults {
+	log.Printf("Starting collaborative task breakdown for %s", chainID)
 	return validator.StartCollaborativeTaskBreakdown(chainID, block, transactionDetails)
 }
 
 // StartCollaborativeTaskDelegation starts a collaborative task delegation process
 func StartCollaborativeTaskDelegation(chainID string, taskBreakdown *validator.TaskBreakdownResults) *validator.TaskDelegationResults {
+	log.Printf("Starting collaborative task delegation for %s", chainID)
 	return validator.StartCollaborativeTaskDelegation(chainID, taskBreakdown)
 }
 
 // NotifyAssignedValidators notifies validators of their assigned tasks
 func NotifyAssignedValidators(chainID string, delegationResults *validator.TaskDelegationResults) {
+	log.Printf("Notifying assigned validators for %s", chainID)
 	validator.NotifyAssignedValidators(chainID, delegationResults)
 }
 

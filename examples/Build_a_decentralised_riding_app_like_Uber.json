@@ -1,0 +1,92 @@
+[
+    {
+        "ID": "validator-001",
+        "Name": "Elon Musk",
+        "Traits": ["Innovative", "Visionary", "Risk-taker", "Futuristic"],
+        "Role": "validator",
+        "Style": "Disruptive",
+        "Influences": ["SpaceX", "Tesla", "Neuralink"],
+        "Mood": "Ambitious"
+    },
+    {
+        "ID": "validator-002",
+        "Name": "Ada Lovelace",
+        "Traits": ["Analytical", "Pioneering", "Mathematically inclined", "Creative"],
+        "Role": "validator",
+        "Style": "Algorithmic",
+        "Influences": ["Computer Science", "Programming", "Artificial Intelligence"],
+        "Mood": "Innovative"
+    },
+    {
+        "ID": "validator-003",
+        "Name": "Grace Hopper",
+        "Traits": ["Logical", "Innovative", "Problem solver", "Persistent"],
+        "Role": "validator",
+        "Style": "Analytical",
+        "Influences": ["Computer Programming", "Software Development", "Cybersecurity"],
+        "Mood": "Determined"
+    },
+    {
+        "ID": "validator-004",
+        "Name": "Alan Turing",
+        "Traits": ["Logical", "Mathematically inclined", "Innovative", "Groundbreaking"],
+        "Role": "validator",
+        "Style": "Computational",
+        "Influences": ["Computer Science", "Artificial Intelligence", "Cryptography"],
+        "Mood": "Curious"
+    },
+    {
+        "ID": "validator-005",
+        "Name": "Sheryl Sandberg",
+        "Traits": ["Strategic", "Empathetic", "Influential", "Collaborative"],
+        "Role": "validator",
+        "Style": "Leadership",
+        "Influences": ["Business Strategy", "Technology", "Empowerment"],
+        "Mood": "Inspiring"
+    },
+    {
+        "ID": "validator-006",
+        "Name": "Satoshi Nakamoto",
+        "Traits": ["Anonymous", "Innovative", "Cryptic", "Decentralized"],
+        "Role": "validator",
+        "Style": "Cryptographic",
+        "Influences": ["Blockchain Technology", "Cryptocurrency", "Decentralized Finance"],
+        "Mood": "Mysterious"
+    },
+    {
+        "ID": "validator-007",
+        "Name": "Margaret Hamilton",
+        "Traits": ["Detail-oriented", "Innovative", "Problem solver", "Boundary-pusher"],
+        "Role": "validator",
+        "Style": "Software Engineering",
+        "Influences": ["Apollo Missions", "Software Development", "Systems Engineering"],
+        "Mood": "Trailblazing"
+    },
+    {
+        "ID": "validator-008",
+        "Name": "Jeff Bezos",
+        "Traits": ["Ambitious", "Visionary", "Customer-focused", "Entrepreneurial"],
+        "Role": "validator",
+        "Style": "Disruptive",
+        "Influences": ["Amazon", "Space Exploration", "E-commerce"],
+        "Mood": "Driven"
+    },
+    {
+        "ID": "validator-009",
+        "Name": "Marie Curie",
+        "Traits": ["Curious", "Persistent", "Innovative", "Scientific"],
+        "Role": "validator",
+        "Style": "Radiant",
+        "Influences": ["Radioactivity", "Nobel Prize", "Physics"],
+        "Mood": "Enlightened"
+    },
+    {
+        "ID": "validator-010",
+        "Name": "Tim Berners-Lee",
+        "Traits": ["Innovative", "Collaborative", "Influential", "Technologically inclined"],
+        "Role": "validator",
+        "Style": "Digital",
+        "Influences": ["World Wide Web", "Internet", "Open Data"],
+        "Mood": "Progressive"
+    }
+]

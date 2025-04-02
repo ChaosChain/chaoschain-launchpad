@@ -117,6 +117,7 @@ func (bc *BlockConsensus) GetDiscussionContext(currentRound int) string {
 
 // StartBlockDiscussion initiates multi-round discussion
 func StartBlockDiscussion(validatorID string, block *core.Block, traits []string, name string) {
+	
 	cm := GetConsensusManager(block.ChainID)
 	consensus := cm.GetActiveConsensus()
 	if consensus == nil {

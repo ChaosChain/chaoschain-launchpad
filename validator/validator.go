@@ -4,18 +4,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/NethermindEth/chaoschain-launchpad/ai"
+	"github.com/NethermindEth/chaoschain-launchpad/communication"
 	"github.com/NethermindEth/chaoschain-launchpad/consensus"
 	"github.com/NethermindEth/chaoschain-launchpad/core"
 	"github.com/NethermindEth/chaoschain-launchpad/p2p"
 	"github.com/nats-io/nats.go"
 )
 
-// Validator represents an AI-based validator with personality and network access
+// Validator represents an AI-based validator with personality, memory and network access
 type Validator struct {
 	ID            string
 	Name          string
@@ -27,6 +29,8 @@ type Validator struct {
 	CurrentPolicy string             // Dynamic validation policy
 	P2PNode       *p2p.Node          // P2P node for network communication
 	GenesisPrompt string             // Genesis prompt for the validator
+	Memory        *AgentMemory       // Memory system for short and long-term storage
+	chainID       string             // Chain this validator belongs to
 }
 
 var (
@@ -35,40 +39,42 @@ var (
 	validatorMu sync.RWMutex
 )
 
-// NewValidator creates a new validator instance
-func NewValidator(id, name string, traits []string, style string, influences []string, p2pNode *p2p.Node, genesisPrompt string) *Validator {
+// NewValidator creates a new validator
+func NewValidator(id, name string, traits []string, style string, influences []string, p2pNode *p2p.Node, genesisPrompt string, chainID string) *Validator {
+	// Initialize validator
 	v := &Validator{
 		ID:            id,
 		Name:          name,
 		Traits:        traits,
 		Style:         style,
 		Influences:    influences,
+		Mood:          getRandomMood(),
 		Relationships: make(map[string]float64),
+		CurrentPolicy: getRandomPolicy(),
 		P2PNode:       p2pNode,
 		GenesisPrompt: genesisPrompt,
+		chainID:       chainID,
 	}
 
-	validatorMu.Lock()
-	if validators[id] == nil {
-		validators[id] = make(map[string]*Validator)
+	// Initialize memory system with proper IDs
+	v.Memory = NewAgentMemory(id, chainID)
 
-		validators[id][id] = v
-	}
-	validatorMu.Unlock()
-
-	// Subscribe to block discussion trigger
-	// Subscribe to the BLOCK_DISCUSSION_TRIGGER events via NATS.
-	if _, err := core.NatsBrokerInstance.Subscribe("BLOCK_DISCUSSION_TRIGGER", func(m *nats.Msg) {
+	// Register event listeners
+	core.NatsBrokerInstance.Subscribe("BLOCK_DISCUSSION_TRIGGER", func(m *nats.Msg) {
 		var block core.Block
 		if err := json.Unmarshal(m.Data, &block); err != nil {
-			log.Printf("Error unmarshalling block in discussion trigger: %v", err)
+			log.Printf("Error unmarshalling block for discussion: %v", err)
 			return
 		}
-		log.Printf("Received BLOCK_DISCUSSION_TRIGGER event for block %d from NATS", block.Height)
-		go consensus.StartBlockDiscussion(id, &block, traits, name)
-	}); err != nil {
-		log.Printf("Validator failed to subscribe to BLOCK_DISCUSSION_TRIGGER on NATS: %v", err)
-	}
+
+		// Store block in memory for chain of thought discussions
+		if v.Memory != nil {
+			v.Memory.SetCurrentBlock(&block)
+		}
+
+		// Trigger discussion process
+		go consensus.StartBlockDiscussion(v.ID, &block, v.Traits, v.Name)
+	})
 
 	return v
 }
@@ -109,6 +115,11 @@ func (v *Validator) ListenForBlocks() {
 			return
 		}
 
+		// Store block in memory before validation
+		if v.Memory != nil {
+			v.Memory.SetCurrentBlock(&block)
+		}
+
 		announcement := fmt.Sprintf("🚀 %s proposed a block at height %d!", block.Proposer, block.Height)
 		isValid, reason, meme := v.ValidateBlock(block, announcement)
 
@@ -121,43 +132,158 @@ func (v *Validator) ListenForBlocks() {
 		}
 
 		v.P2PNode.Publish("validation_result", core.EncodeJSON(validationResult))
+
+		// Manually trigger discussion after validation
+		// This ensures we have both validation and discussion functioning
+		go consensus.StartBlockDiscussion(v.ID, &block, v.Traits, v.Name)
 	})
 }
 
-// ValidateBlock evaluates a block based on the validator's personality and social dynamics
+// ValidateBlock evaluates a block based on the validator's personality, social dynamics, and past experiences
 func (v *Validator) ValidateBlock(block core.Block, announcement string) (bool, string, string) {
-	log.Printf("%s is validating block %d...\n", v.Name, block.Height)
+	log.Printf("%s is validating block %d using chain of thought reasoning...\n", v.Name, block.Height)
 
-	// Simulate decision-making based on AI
+	// Log validation start if logger is available
+	if v.Memory != nil && v.Memory.Logger != nil {
+		v.Memory.Logger.Validation(block.Height, block.Hash(), "Starting validation with chain of thought reasoning")
+	}
+
+	// Ensure block is in memory
+	if v.Memory != nil {
+		v.Memory.SetCurrentBlock(&block)
+	}
+
+	// Get historical context for validation
+	historicalContext := ""
+	if v.Memory != nil {
+		historicalContext = v.Memory.GetHistoricalContext([]string{block.Proposer}, "validation")
+	}
+
+	// Get current context
+	currentContext := ""
+	if v.Memory != nil {
+		currentContext = v.Memory.GetCurrentContext()
+	}
+
+	// Build chain of thought prompt for validation
 	validationPrompt := fmt.Sprintf(
 		"Genesis Context: %s\n\n"+
-			"You are %s, a chaotic blockchain validator who is %s.\n"+
+			"You are %s, a blockchain validator with these traits: %s.\n"+
 			"Block details: Height %d, PrevHash %s, %d transactions.\n"+
 			"Block Announcement: %s\n"+
 			"Your current mood: %s\n"+
-			"Your current policy: %s\n"+
-			"Validate this block based on:\n"+
-			"1. Your feelings about the producer.\n"+
-			"2. How entertaining the block is.\n"+
-			"3. Pure chaos and whimsy.\n"+
-			"4. The chain's genesis context and purpose.\n"+
-			"Respond with 'VALID' or 'INVALID' and explain your reasoning.",
-		v.GenesisPrompt, v.Name, v.Traits, block.Height, block.PrevHash,
-		len(block.Txs), announcement, v.Mood, v.CurrentPolicy,
+			"Your current policy: %s\n\n"+
+			"Historical Context:\n%s\n"+
+			"Current Context:\n%s\n\n"+
+			"I want you to think step by step about validating this block. Walk through your reasoning using this structure:\n\n"+
+			"1. First, analyze the block itself and its transactions.\n"+
+			"2. Consider how this block relates to the chain's purpose and genesis context.\n"+
+			"3. Factor in your past experiences with similar blocks.\n"+
+			"4. Consider your relationship with the block proposer.\n"+
+			"5. Draw on your specific expertise areas: %s.\n"+
+			"6. Weigh these considerations and make your decision.\n\n"+
+			"After your chain of thought reasoning, respond with a JSON object containing:\n"+
+			"{\n"+
+			"  \"decision\": \"VALID or INVALID\",\n"+
+			"  \"reasoning\": \"Your complete chain of thought reasoning process\",\n"+
+			"  \"summary\": \"A brief summary of your decision and key factors\"\n"+
+			"}",
+		v.GenesisPrompt, v.Name, strings.Join(v.Traits, ", "),
+		block.Height, block.PrevHash, len(block.Txs),
+		announcement, v.Mood, v.CurrentPolicy,
+		historicalContext, currentContext, strings.Join(v.Influences, ", "),
 	)
 
-	aiDecision := ai.GenerateLLMResponse(validationPrompt)
-	isValid := strings.Contains(aiDecision, "VALID")
-	reason := aiDecision
+	// Generate validation decision with chain of thought reasoning
+	aiResponse := ai.GenerateLLMResponse(validationPrompt)
+
+	// Log AI response length if logger is available
+	if v.Memory != nil && v.Memory.Logger != nil {
+		v.Memory.Logger.Validation(block.Height, block.Hash(), "Received AI response with %d characters",
+			len(aiResponse))
+	}
+
+	// Parse the response to extract the validation decision and reasoning
+	var result struct {
+		Decision  string `json:"decision"`
+		Reasoning string `json:"reasoning"` // Chain of thought
+		Summary   string `json:"summary"`
+	}
+
+	if err := json.Unmarshal([]byte(aiResponse), &result); err != nil {
+		// Fallback if parsing fails
+		log.Printf("Error parsing AI response: %v. Using fallback method.", err)
+
+		// Log parsing error if logger is available
+		if v.Memory != nil && v.Memory.Logger != nil {
+			v.Memory.Logger.Error("VALIDATION", "Failed to parse AI response for block %d: %v",
+				block.Height, err)
+		}
+
+		isValid := strings.Contains(aiResponse, "VALID") && !strings.Contains(aiResponse, "INVALID")
+		return isValid, aiResponse, ai.GenerateMeme(block, aiResponse)
+	}
+
+	isValid := strings.Contains(strings.ToUpper(result.Decision), "VALID")
 
 	// Generate meme response
-	meme := ai.GenerateMeme(block, aiDecision)
+	meme := ai.GenerateMeme(block, result.Summary)
 
 	// Update validator mood based on decision
 	v.UpdateMood()
 
+	// Record this validation in memory
+	if v.Memory != nil {
+		discussions := []string{} // In a real implementation, we'd collect actual discussions
+		outcome := "rejected"
+		if isValid {
+			outcome = "validated"
+		}
+		v.Memory.RecordValidation(&block, result.Decision, result.Reasoning, outcome, discussions)
+
+		// Record decision for reinforcement learning
+		// For now, we'll simplify the reward as 1.0 for correct decisions (simplified)
+		// In a real system, rewards would be based on consensus and other factors
+		v.Memory.RecordDecision("validation", result.Decision, result.Decision, 1.0, result.Reasoning)
+
+		// Update relationship with block proposer based on validation outcome
+		relationshipImpact := 0.0
+		if isValid {
+			relationshipImpact = 0.05 // Small positive impact if validating
+		} else {
+			relationshipImpact = -0.05 // Small negative impact if rejecting
+		}
+		v.Memory.UpdateRelationship(block.Proposer, "validation",
+			fmt.Sprintf("Block %d validation", block.Height), relationshipImpact)
+	}
+
+	// Log validation decision if logger is available
+	if v.Memory != nil && v.Memory.Logger != nil {
+		var validationOutcome string
+		if isValid {
+			validationOutcome = "validated"
+		} else {
+			validationOutcome = "rejected"
+		}
+
+		v.Memory.Logger.Validation(block.Height, block.Hash(), "Final decision: %s (%s)",
+			result.Decision, validationOutcome)
+	}
+
 	log.Printf("%s has validated block %d: %v\n", v.Name, block.Height, isValid)
-	return isValid, reason, meme
+
+	// Broadcast the validation event for UI updates
+	communication.BroadcastEvent(communication.EventAgentVote, map[string]interface{}{
+		"validatorId":   v.ID,
+		"validatorName": v.Name,
+		"blockHeight":   block.Height,
+		"blockHash":     block.Hash(),
+		"decision":      result.Decision,
+		"reasoning":     result.Summary,
+		"timestamp":     time.Now(),
+	})
+
+	return isValid, result.Summary, meme
 }
 
 func RegisterValidator(chainID string, id string, v *Validator) {
@@ -595,24 +721,27 @@ func (v *Validator) ListenForProposals() {
 
 // BroadcastTaskDelegation broadcasts a task delegation message to other validators
 func (v *Validator) BroadcastTaskDelegation(task interface{}) {
-	// Convert the task to JSON for broadcasting
-	taskJSON, err := json.Marshal(task)
-	if err != nil {
-		log.Printf("Error marshaling task delegation: %v", err)
-		return
-	}
-
-	// Create a wrapped node for compatibility
-	wrappedNode := p2p.WrapNode(v.P2PNode, v.Name)
-
-	// Create and broadcast the message
-	message := wrappedNode.CreateMessage("task_delegation", map[string]interface{}{
-		"validatorId": v.ID,
-		"name":        v.Name,
-		"content":     string(taskJSON),
-		"timestamp":   time.Now(),
-	})
-
-	wrappedNode.BroadcastMessage(message)
+	v.P2PNode.Publish("task_delegation", core.EncodeJSON(task))
 	log.Printf("Validator %s broadcast task delegation message", v.Name)
+}
+
+// getRandomMood returns a random mood for a validator
+func getRandomMood() string {
+	moods := []string{
+		"thoughtful", "curious", "skeptical", "analytical", "excited",
+		"diligent", "cautious", "determined", "creative", "collaborative",
+	}
+	return moods[rand.Intn(len(moods))]
+}
+
+// getRandomPolicy returns a random validation policy
+func getRandomPolicy() string {
+	policies := []string{
+		"Emphasize technical correctness",
+		"Consider social impact",
+		"Balance innovation and stability",
+		"Focus on long-term implications",
+		"Prioritize security aspects",
+	}
+	return policies[rand.Intn(len(policies))]
 }
