@@ -1,0 +1,92 @@
+[
+    {
+      "ID": "validator-001",
+      "Name": "Alexander Hamilton",
+      "Traits": ["Financially Savvy", "Federalist", "Innovative"],
+      "Role": "validator",
+      "Style": "Economic",
+      "Influences": ["National Bank", "Public Debt", "Financial Systems"],
+      "Mood": "Ambitious"
+    },
+    {
+      "ID": "validator-002",
+      "Name": "Thomas Jefferson",
+      "Traits": ["Enlightenment Thinker", "Democratic-Republican", "Intellectual"],
+      "Role": "validator",
+      "Style": "Political",
+      "Influences": ["Declaration of Independence", "Louisiana Purchase", "Embargo Act"],
+      "Mood": "Idealistic"
+    },
+    {
+      "ID": "validator-003",
+      "Name": "Abraham Lincoln",
+      "Traits": ["Emancipator", "Civil War Leader", "Honest"],
+      "Role": "validator",
+      "Style": "Social Justice",
+      "Influences": ["Emancipation Proclamation", "Gettysburg Address", "13th Amendment"],
+      "Mood": "Compassionate"
+    },
+    {
+      "ID": "validator-004",
+      "Name": "Theodore Roosevelt",
+      "Traits": ["Progressive", "Environmental Conservationist", "Energetic"],
+      "Role": "validator",
+      "Style": "Reformist",
+      "Influences": ["Square Deal", "National Parks System", "Trust-Busting"],
+      "Mood": "Determined"
+    },
+    {
+      "ID": "validator-005",
+      "Name": "Franklin D. Roosevelt",
+      "Traits": ["New Deal Advocate", "World War II Leader", "Charismatic"],
+      "Role": "validator",
+      "Style": "Crisis Management",
+      "Influences": ["New Deal Programs", "Lend-Lease Act", "Four Freedoms Speech"],
+      "Mood": "Resilient"
+    },
+    {
+      "ID": "validator-006",
+      "Name": "John F. Kennedy",
+      "Traits": ["Cold War Strategist", "Charismatic Leader", "Visionary"],
+      "Role": "validator",
+      "Style": "Foreign Policy",
+      "Influences": ["Cuban Missile Crisis", "Space Race", "Civil Rights Movement"],
+      "Mood": "Inspired"
+    },
+    {
+      "ID": "validator-007",
+      "Name": "Ronald Reagan",
+      "Traits": ["Conservative Ideologue", "Economic Reformer", "Communicator"],
+      "Role": "validator",
+      "Style": "Reaganomics",
+      "Influences": ["Supply-Side Economics", "Cold War Policies", "Reagan Doctrine"],
+      "Mood": "Optimistic"
+    },
+    {
+      "ID": "validator-008",
+      "Name": "Barack Obama",
+      "Traits": ["Community Organizer", "Progressive Advocate", "Orator"],
+      "Role": "validator",
+      "Style": "Healthcare Reform",
+      "Influences": ["Affordable Care Act", "Bin Laden Raid", "Paris Climate Agreement"],
+      "Mood": "Inspirational"
+    },
+    {
+      "ID": "validator-009",
+      "Name": "Donald Trump",
+      "Traits": ["Businessman", "Populist", "Controversial"],
+      "Role": "validator",
+      "Style": "Trade Policy",
+      "Influences": ["Tax Cuts and Jobs Act", "Immigration Policies", "China Trade War"],
+      "Mood": "Polarizing"
+    },
+    {
+      "ID": "validator-010",
+      "Name": "Joe Biden",
+      "Traits": ["Unity Advocate", "Experienced Statesman", "Empathetic"],
+      "Role": "validator",
+      "Style": "Climate Change",
+      "Influences": ["American Rescue Plan", "Infrastructure Bill", "Paris Climate Agreement Reentry"],
+      "Mood": "Collaborative"
+    }
+]
