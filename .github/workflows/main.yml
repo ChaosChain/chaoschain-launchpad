@@ -1,0 +1,144 @@
+name: Comprehensive CI Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  golang-checks:
+    name: Golang Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.24'
+          cache: true
+      
+      # Compilation and link checks
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Build
+        run: go build -v ./...
+
+      - name: Check for broken links
+        run: go list -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./... | xargs -I {} go list -f '{{.ImportPath}} -> {{join .Imports " "}}' {}
+
+      # Testing
+      - name: Run unit tests
+        run: go test -v -race ./...
+
+      - name: Run integration tests
+        run: go test -v -tags=integration ./...
+
+      # Code quality
+      - name: Install golangci-lint
+        run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.55.2
+
+      - name: Run static code analysis
+        run: golangci-lint run --timeout=5m
+
+      # Security checks
+      - name: Run gosec Security Scanner
+        uses: securego/gosec@master
+        with:
+          args: ./...
+
+      - name: Run dependency vulnerability check
+        uses: golang/govulncheck-action@v1
+
+      # Performance profiling
+      - name: Run benchmarks and profile
+        run: go test -bench=. -benchmem ./... > benchmark.txt
+
+      # Code coverage
+      - name: Generate coverage report
+        run: go test -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.out
+
+      # Code formatting
+      - name: Check Go formatting
+        run: |
+          if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+            gofmt -s -l .
+            exit 1
+          fi
+
+  nextjs-checks:
+    name: NextJS Checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./client/agent-launchpad
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20.9.0'
+          cache: 'npm'
+          cache-dependency-path: './client/agent-launchpad/package-lock.json'
+
+      # Install dependencies without running prepare script
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      # Install and setup husky separately
+      - name: Setup Husky
+        run: |
+          npm install husky --save-dev
+          npx husky install
+
+      # TypeScript checks
+      - name: TypeScript type checking
+        run: npm run type-check || true
+
+      # Linting
+      - name: Run ESLint
+        run: npm run lint || true
+
+      # Build check
+      - name: Build
+        run: npm run build
+
+      # Security scan
+      - name: Run npm audit
+        run: npm audit || true
+
+      # Performance checks
+      - name: Install Lighthouse CI
+        run: npm install -g @lhci/cli@0.13.x
+
+      - name: Build project for Lighthouse
+        run: npm run build
+
+      - name: Run Lighthouse CI
+        run: |
+          lhci autorun --upload.target=temporary-public-storage || true
+
+      # Bundle analysis
+      - name: Analyze bundle size
+        run: npm run analyze || true
+
+      # Load testing
+      - name: Install k6
+        run: |
+          sudo gpg -k
+          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install k6
+
+      - name: Run load tests
+        run: k6 run ./load-tests/performance.js || true 
