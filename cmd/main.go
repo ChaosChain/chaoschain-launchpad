@@ -19,6 +19,7 @@ import (
 	"github.com/cometbft/cometbft/privval"
 	"github.com/cometbft/cometbft/types"
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 )
 
 func fileExists(filename string) bool {
@@ -194,4 +195,11 @@ func main() {
 	router := gin.New()
 	api.SetupRoutes(router, *chainID)
 	log.Fatal(router.Run(fmt.Sprintf(":%d", *apiPort)))
+
+	// Load front-end port env variable
+	err = godotenv.Load("../client/agent-launchpad/.env")
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
+
 }
