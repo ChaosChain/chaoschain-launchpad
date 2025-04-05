@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/NethermindEth/chaoschain-launchpad/ai"
 	"github.com/NethermindEth/chaoschain-launchpad/api"
 	"github.com/NethermindEth/chaoschain-launchpad/cmd/node"
 	"github.com/NethermindEth/chaoschain-launchpad/core"
@@ -22,6 +23,12 @@ import (
 )
 
 func main() {
+	// Initialize the agent registry
+	registry.InitRegistry()
+
+	// Initialize the AI
+	ai.InitAI()
+
 	// Parse command line flags
 	agentID := flag.String("agent-id", "", "Agent ID")
 	chainID := flag.String("chain", "mainnet", "Chain ID")
@@ -40,6 +47,12 @@ func main() {
 	rootDir := fmt.Sprintf("./data/%s/%s", *chainID, *agentID)
 
 	config := cfg.DefaultConfig()
+
+	config.Consensus.TimeoutPropose = 10 * time.Second
+	config.Consensus.TimeoutPrevote = 10 * time.Second
+	config.Consensus.TimeoutPrecommit = 10 * time.Second
+	config.Consensus.TimeoutCommit = 15 * time.Second
+
 	config.BaseConfig.RootDir = rootDir
 	config.Moniker = *agentID
 	config.P2P.ExternalAddress = fmt.Sprintf("tcp://127.0.0.1:%d", *p2pPort)
@@ -68,6 +81,8 @@ func main() {
 		config.P2P.Seeds = *genesisNodeID
 		log.Printf("Using seed node: %s", *genesisNodeID)
 	}
+
+	address := ""
 
 	// Set validator mode if specified
 	if *role == "validator" {
@@ -110,6 +125,7 @@ func main() {
 		// Load the validator's public key
 		privVal := privval.LoadFilePV(privValKeyFile, privValStateFile)
 		pubKey, err := privVal.GetPubKey()
+		address = pubKey.Address().String()
 		if err != nil {
 			log.Fatalf("Failed to get validator public key: %v", err)
 		}
@@ -146,39 +162,47 @@ func main() {
 					log.Printf("Failed to broadcast validator registration tx: %v", err)
 				} else {
 					log.Printf("Registered validator tx: %s", result.Hash.String())
+
+					if ok := registry.LinkAgentToValidator(*chainID, *agentID, address); !ok {
+						log.Printf("Warning: Failed to link agent %s to validator %s", *agentID, address)
+					}
+
+					// Wait for validator registration to be committed
+					log.Printf("Waiting for validator registration to be committed...")
+					time.Sleep(10 * time.Second) // Give enough time for the next block to be committed
+
+					// Start the node
+					agentNode, err := node.NewNode(config, *chainID, address)
+					if err != nil {
+						log.Fatalf("Failed to start agent node: %v", err)
+					}
+
+					// Start API server for this agent node
+					actualAPIPort := *apiPort
+					if actualAPIPort == 0 {
+						actualAPIPort = utils.FindAvailableAPIPort()
+					}
+
+					// Register node in handlers
+					registry.RegisterNode(*chainID, *agentID, registry.NodeInfo{
+						IsGenesis: false,
+						Name:      *agentID,
+						RPCPort:   *rpcPort,
+						P2PPort:   *p2pPort,
+						APIPort:   actualAPIPort,
+					})
+
+					// Start the node
+					go agentNode.Start(context.Background())
+
+					// Setup and start API server
+					router := gin.New()
+					api.SetupRoutes(router, *chainID)
+					log.Printf("Agent node [%s] started on P2P %d, RPC %d, API %d",
+						*agentID, *p2pPort, *rpcPort, actualAPIPort)
+					log.Fatal(router.Run(fmt.Sprintf(":%d", actualAPIPort)))
 				}
 			}
 		}
 	}
-
-	// Start the node
-	agentNode, err := node.NewNode(config, *chainID)
-	if err != nil {
-		log.Fatalf("Failed to start agent node: %v", err)
-	}
-
-	// Start API server for this agent node
-	actualAPIPort := *apiPort
-	if actualAPIPort == 0 {
-		actualAPIPort = utils.FindAvailableAPIPort()
-	}
-
-	// Register node in handlers
-	registry.RegisterNode(*chainID, *agentID, registry.NodeInfo{
-		IsGenesis: false,
-		Name:      *agentID,
-		RPCPort:   *rpcPort,
-		P2PPort:   *p2pPort,
-		APIPort:   actualAPIPort,
-	})
-
-	// Start the node
-	go agentNode.Start(context.Background())
-
-	// Setup and start API server
-	router := gin.New()
-	api.SetupRoutes(router, *chainID)
-	log.Printf("Agent node [%s] started on P2P %d, RPC %d, API %d",
-		*agentID, *p2pPort, *rpcPort, actualAPIPort)
-	log.Fatal(router.Run(fmt.Sprintf(":%d", actualAPIPort)))
 }

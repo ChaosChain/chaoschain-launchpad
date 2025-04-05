@@ -3,6 +3,7 @@ package ai
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -71,15 +72,10 @@ func GetValidatorDiscussion(agent core.Agent, tx core.Transaction) Discussion {
 
 		Your response MUST be a JSON object with exactly these fields:
 		{
-			"id": "",                     // Leave empty, will be filled in
-			"validatorId": "",           // Leave empty, will be filled in
-			"validatorName": "",         // Leave empty, will be filled in
 			"message": "Your detailed discussion message here. Must reference other validators using |@Name| format",
-			"support": false | true,            // Should be true if you support the statement, false otherwise
-			"oppose": false | true,             // Should be true if you oppose the statement, false otherwise
-			"question": false | true,           // Should be true if you are unsure, false otherwise
-			"round": 0,                  // Leave as 0, will be filled in
-			"timestamp": ""              // Leave empty, will be filled in
+			"support": false | true,            // Should be true if you support the statement
+			"oppose": false | true,             // Should be true if you oppose the statement
+			"question": false | true            // Should be true if you are unsure
 		}
 
 		Requirements:
@@ -93,20 +89,35 @@ func GetValidatorDiscussion(agent core.Agent, tx core.Transaction) Discussion {
 		Do not include any additional text or formatting.`,
 		agent.Name, strings.Join(agent.Traits, ", "), tx.Content)
 
-	response := GenerateLLMResponseWithResearch(prompt, tx.Content, agent.Traits)
+	response := GenerateLLMResponse(prompt)
+	log.Printf("LLM response: %s", response)
 
-	var discussion Discussion
-	if err := json.Unmarshal([]byte(response), &discussion); err != nil {
-		fmt.Println("Error parsing LLM response:", err)
+	// Create a temporary struct without the time fields
+	type tempDiscussion struct {
+		Message  string `json:"message"`
+		Support  bool   `json:"support"`
+		Oppose   bool   `json:"oppose"`
+		Question bool   `json:"question"`
+	}
+
+	var temp tempDiscussion
+	if err := json.Unmarshal([]byte(response), &temp); err != nil {
+		log.Printf("Error parsing LLM response: %v", err)
 		return Discussion{}
 	}
 
-	// Fill in the required fields
-	discussion.ID = uuid.New().String()
-	discussion.ValidatorID = agent.ID
-	discussion.ValidatorName = agent.Name
-	discussion.Round = 1 // Initial discussion is always round 1
-	discussion.Timestamp = time.Now()
+	// Create the final Discussion with all fields
+	discussion := Discussion{
+		ID:            uuid.New().String(),
+		ValidatorID:   agent.ID,
+		ValidatorName: agent.Name,
+		Message:       temp.Message,
+		Support:       temp.Support,
+		Oppose:        temp.Oppose,
+		Question:      temp.Question,
+		Round:         1,
+		Timestamp:     time.Now(),
+	}
 
 	return discussion
 }

@@ -23,12 +23,12 @@ type Node struct {
 	chainId  string
 }
 
-func NewNode(config *cfg.Config, chainId string) (*Node, error) {
+func NewNode(config *cfg.Config, chainId string, selfValidatorAddr string) (*Node, error) {
 	// Initialize config files and keys
 	cfg.EnsureRoot(config.RootDir) // This function returns void, no need to check error
 
 	// Create ABCI application
-	app := abci.NewApplication(chainId)
+	app := abci.NewApplication(chainId, selfValidatorAddr)
 
 	genDoc, err := types.GenesisDocFromFile(config.GenesisFile())
 	log.Printf("Genesis doc: %+v", genDoc)

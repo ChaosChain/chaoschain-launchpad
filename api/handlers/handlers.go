@@ -75,22 +75,21 @@ func RegisterAgent(c *gin.Context) {
 
 	log.Printf("This is the seed node with seed node %s", seedNode)
 
-	// Create and start the node
-	cmd := exec.Command(
-		"./chaos-agent", // compiled agent binary
-		"--chain", chainID,
-		"--agent-id", agent.ID,
-		"--p2p-port", fmt.Sprintf("%d", p2pPort),
-		"--rpc-port", fmt.Sprintf("%d", rpcPort),
-		"--genesis-node-id", seedNode,
-		"--role", agent.Role, // Use the role flag with the agent's role value
-		"--api-port", fmt.Sprintf("%d", apiPort),
-	)
+	// Create command string with all arguments
+	cmdStr := fmt.Sprintf("cd %s && ./chaos-agent --chain %s --agent-id %s --p2p-port %d --rpc-port %d --genesis-node-id %s --role %s --api-port %d",
+		getCurrentDir(), chainID, agent.ID, p2pPort, rpcPort, seedNode, agent.Role, apiPort)
 
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// Open a new terminal window and run the agent process there
+	terminalCmd := exec.Command("osascript", "-e", fmt.Sprintf(`
+		tell application "Terminal"
+			do script "%s"
+		end tell
+	`, cmdStr))
 
-	if err := cmd.Start(); err != nil {
+	terminalCmd.Stdout = os.Stdout
+	terminalCmd.Stderr = os.Stderr
+
+	if err := terminalCmd.Start(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to start agent process: %v", err)})
 		return
 	}
@@ -98,7 +97,7 @@ func RegisterAgent(c *gin.Context) {
 	// Create a channel to receive process errors
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- cmd.Wait()
+		errCh <- terminalCmd.Wait()
 	}()
 
 	// Wait briefly for ports to be bound
@@ -112,7 +111,7 @@ func RegisterAgent(c *gin.Context) {
 	}
 
 	// Check if the process is still running
-	if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
+	if terminalCmd.ProcessState != nil && terminalCmd.ProcessState.Exited() {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Agent process exited unexpectedly"})
 		return
 	}
@@ -134,6 +133,14 @@ func RegisterAgent(c *gin.Context) {
 		"rpcPort": rpcPort,
 		"apiPort": apiPort,
 	})
+}
+
+func getCurrentDir() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return dir
 }
 
 // GetBlock - Fetch a block by height
@@ -559,7 +566,7 @@ func CreateChain(c *gin.Context) {
 	}
 
 	// Create and start the genesis node
-	genesisNode, err := node.NewNode(config, req.ChainID)
+	genesisNode, err := node.NewNode(config, req.ChainID, "") //TODO: Add the validator address
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to create genesis node: %v", err)})
 		return
@@ -807,5 +814,14 @@ func GetAllAgents(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"agents": agents,
+	})
+}
+
+func GetRegistry(c *gin.Context) {
+	chainID := c.GetString("chainID")
+	agents := registry.GetAllAgents(chainID)
+	c.JSON(http.StatusOK, gin.H{
+		"agents":     agents,
+		"validators": registry.GetAllValidatorAgentMappings(chainID),
 	})
 }
