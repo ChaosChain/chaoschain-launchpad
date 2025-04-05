@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/NethermindEth/chaoschain-launchpad/ai"
 	"github.com/NethermindEth/chaoschain-launchpad/api"
 	"github.com/NethermindEth/chaoschain-launchpad/cmd/node"
 	"github.com/NethermindEth/chaoschain-launchpad/registry"
@@ -36,6 +37,12 @@ func main() {
 	nats := flag.String("nats", "nats://localhost:4222", "NATS URL")
 	flag.Parse()
 
+	// Initialize the agent registry
+	registry.InitRegistry()
+
+	// Initialize the AI
+	ai.InitAI()
+
 	// before creating data directory, check if it exists and delete it
 	if _, err := os.Stat(fmt.Sprintf("./data/%s", *chainID)); err == nil {
 		os.RemoveAll(fmt.Sprintf("./data/%s", *chainID))
@@ -52,6 +59,12 @@ func main() {
 
 	// Create CometBFT config
 	config := cfg.DefaultConfig()
+
+	config.Consensus.TimeoutPropose = 10 * time.Second
+	config.Consensus.TimeoutPrevote = 10 * time.Second
+	config.Consensus.TimeoutPrecommit = 10 * time.Second
+	config.Consensus.TimeoutCommit = 15 * time.Second
+
 	config.BaseConfig.RootDir = dataDir
 	config.Moniker = *chainID
 	config.P2P.ListenAddress = fmt.Sprintf("tcp://0.0.0.0:%d", *p2pPort)
@@ -70,18 +83,21 @@ func main() {
 	// Initialize validator key files
 	privValKeyFile := config.PrivValidatorKeyFile()
 	privValStateFile := config.PrivValidatorStateFile()
+	var privVal *privval.FilePV
 	if !fileExists(privValKeyFile) {
-		privVal := privval.GenFilePV(privValKeyFile, privValStateFile)
+		privVal = privval.GenFilePV(privValKeyFile, privValStateFile)
 		// Initialize with empty state
 		privVal.Save()
 	} else {
 		// Load existing validator and ensure state file exists
-		privVal := privval.LoadFilePV(privValKeyFile, privValStateFile)
+		privVal = privval.LoadFilePV(privValKeyFile, privValStateFile)
 		if !fileExists(privValStateFile) {
 			// Initialize with empty state if missing
 			privVal.Save()
 		}
 	}
+
+	pubKey, err := privVal.GetPubKey()
 
 	// Initialize node key file
 	nodeKeyFile := config.NodeKeyFile()
@@ -151,7 +167,7 @@ func main() {
 	config.P2P.SeedMode = true // Only helps discover peers, doesn't try to dial anyone
 	config.P2P.PexReactor = true
 
-	genesisNode, err := node.NewNode(config, *chainID)
+	genesisNode, err := node.NewNode(config, *chainID, pubKey.Address().String())
 	if err != nil {
 		log.Fatalf("main: Failed to create node: %v", err)
 	}
@@ -181,7 +197,7 @@ func main() {
 	log.Fatal(router.Run(fmt.Sprintf(":%d", *apiPort)))
 
 	// Load front-end port env variable
-	err := godotenv.Load("../client/agent-launchpad/.env")
+	err = godotenv.Load("../client/agent-launchpad/.env")
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}

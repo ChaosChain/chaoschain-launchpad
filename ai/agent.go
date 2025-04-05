@@ -3,7 +3,6 @@ package ai
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,8 +49,6 @@ func GenerateAgents(topic string) (string, error) {
 	Format the response as valid JSON only, no additional text.`, topic, string(physicsData), string(biologyData), topic)
 
 	response := GenerateLLMResponse(prompt)
-
-	log.Println("Generated agents: ", response)
 
 	// Parse the response to validate JSON
 	var agents []core.Agent
