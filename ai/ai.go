@@ -211,7 +211,7 @@ func GenerateLLMResponseWithResearch(prompt string, topic string, traits []strin
 
 // generateLLMResponseWithOptions is the internal implementation that handles both research and non-research cases
 func generateLLMResponseWithOptions(prompt string, allowResearch bool, topic string, traits []string, config LLMConfig) string {
-	client := openai.NewClient("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")
+	client := openai.NewClient(os.Getenv("OPENAI_API_KEY"))
 
 	// Only perform research if allowed and needed
 	if allowResearch && strings.Contains(prompt, "Block details:") {
