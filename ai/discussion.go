@@ -90,7 +90,6 @@ func GetValidatorDiscussion(agent core.Agent, tx core.Transaction) Discussion {
 		agent.Name, strings.Join(agent.Traits, ", "), tx.Content)
 
 	response := GenerateLLMResponse(prompt)
-	log.Printf("LLM response: %s", response)
 
 	// Create a temporary struct without the time fields
 	type tempDiscussion struct {

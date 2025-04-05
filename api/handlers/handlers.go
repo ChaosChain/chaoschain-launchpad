@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -72,8 +71,6 @@ func RegisterAgent(c *gin.Context) {
 
 	// Create seed node string
 	seedNode := fmt.Sprintf("%s@127.0.0.1:26656", genesisNodeKey.ID())
-
-	log.Printf("This is the seed node with seed node %s", seedNode)
 
 	// Create command string with all arguments
 	cmdStr := fmt.Sprintf("cd %s && ./chaos-agent --chain %s --agent-id %s --p2p-port %d --rpc-port %d --genesis-node-id %s --role %s --api-port %d",
@@ -259,7 +256,6 @@ func SubmitTransaction(c *gin.Context) {
 		return
 	}
 
-	log.Printf("This is the status %+v", status)
 	tx.Data = status.ValidatorInfo.PubKey.Bytes()
 
 	// Encode transaction
@@ -305,8 +301,6 @@ func GetValidators(c *gin.Context) {
 		})
 		return
 	}
-
-	log.Printf("This is the node info %+v", nodeInfo)
 
 	// Connect to the node using its RPC port
 	client, err := rpchttp.New(fmt.Sprintf("tcp://localhost:%d", nodeInfo.RPCPort), "/websocket")

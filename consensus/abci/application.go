@@ -280,8 +280,6 @@ func (app *Application) ProcessProposal(req types.RequestProcessProposal) types.
 			i, transaction.Type, transaction.From)
 
 		if transaction.Type == "discuss_transaction" {
-			log.Printf("Calling ai function for the following topic: %s %s %v %v",
-				transaction.Content, currentAgent.Name, currentAgent.Traits, currentAgent.IsValidator)
 
 			discussion := ai.GetValidatorDiscussion(currentAgent, transaction)
 
