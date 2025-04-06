@@ -239,8 +239,8 @@ func SubmitTransaction(c *gin.Context) {
 		return
 	}
 
-	// Set transaction type and data
-	tx.Type = "discuss_transaction"
+	// // Set transaction type and data
+	// tx.Type = "discuss_transaction"
 
 	// Connect to local RPC endpoint to get validator's public key
 	client, err := rpchttp.New(fmt.Sprintf("tcp://localhost:%d", nodeInfo.RPCPort), "/websocket")
