@@ -1,8 +1,6 @@
 package api
 
 import (
-	"os"
-
 	"github.com/NethermindEth/chaoschain-launchpad/api/handlers"
 	"github.com/gin-gonic/gin"
 )
@@ -24,8 +22,7 @@ func chainIDMiddleware(chainID string) gin.HandlerFunc {
 func SetupRoutes(router *gin.Engine, chainID string) {
 	// Add CORS middleware
 	router.Use(func(c *gin.Context) {
-		port := os.Getenv("PORT")
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "http://localhost:"+port)
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "http://localhost:4000")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, Authorization, X-Chain-Id")
 

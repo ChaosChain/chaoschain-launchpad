@@ -6,7 +6,7 @@ import { useParams, useSearchParams } from "next/navigation";
 import { FiArrowLeft } from "react-icons/fi";
 import { useEffect, useState, useRef } from "react";
 import { wsService } from "@/services/websocket";
-import { fetchValidators, proposeBlock } from "@/services/api";
+import { fetchAgents } from "@/services/api";
 
 interface AgentVote {
     validatorId: string;
@@ -14,6 +14,7 @@ interface AgentVote {
     timestamp: string;
     type: "support" | "oppose" | "question";
     round: number;
+    approval: boolean;
 }
 
 interface VotingResult {
@@ -60,6 +61,8 @@ export default function ThreadDetailPage() {
   const [votingResult, setVotingResult] = useState<VotingResult | null>(null);
   const [blockVerdict, setBlockVerdict] = useState<any | null>(null);
   const [validators, setValidators] = useState<{ [key: string]: string }>({});
+  const [finalVerdict, setFinalVerdict] = useState<string | null>(null);
+  const [currentRound, setCurrentRound] = useState<number>(0);
 
   // Use a ref to prevent duplicate "AGENT_VOTE" subscriptions
   const subscribedRef = useRef({
@@ -78,7 +81,28 @@ export default function ThreadDetailPage() {
     to: searchParams.get('to') || '',
     amount: parseInt(searchParams.get('amount') || '0'),
     fee: parseInt(searchParams.get('fee') || '0'),
-    timestamp: parseInt(searchParams.get('timestamp') || '0')
+    timestamp: parseInt(searchParams.get('timestamp') || '0'),
+    hash: searchParams.get('hash') || ''
+  };
+
+  // Calculate voting result from final round
+  const calculateVotingResult = (replies: AgentVote[]) => {
+    const round10Votes = replies.filter(reply => reply.round === 10);
+    
+    if (round10Votes.length === 0) return null;
+    
+    const support = round10Votes.filter(vote => vote.approval).length;
+    const oppose = round10Votes.length - support;
+    const accepted = support >= (round10Votes.length * 2/3);
+    
+    return {
+      support,
+      oppose,
+      accepted,
+      reason: accepted 
+        ? `${support}/${round10Votes.length} validators approved (${Math.round(support/round10Votes.length * 100)}%)`
+        : `Insufficient approvals: ${support}/${round10Votes.length} (${Math.round(support/round10Votes.length * 100)}%)`
+    };
   };
 
   useEffect(() => {
@@ -99,20 +123,26 @@ export default function ThreadDetailPage() {
       receivedVotes.current.add(uniqueId);
       console.log("AGENT_VOTE received:", payload);
       setReplies(prev => {
-        // Check if this exact message already exists
         const exists = prev.some(reply => 
           reply.validatorId === payload.validatorId && 
           reply.timestamp === payload.timestamp &&
           reply.round === payload.round
         );
-        if (exists) return prev;
-        return [...prev, payload];
+        const newReplies = [...prev];
+        if (!exists) {
+          newReplies.push(payload);
+          // Update current round if this is a new higher round
+          if (payload.round > currentRound) {
+            setCurrentRound(payload.round);
+          }
+        }
+        
+        // Calculate voting result when we have round 10 votes
+        const result = calculateVotingResult(newReplies);
+        if (result) setVotingResult(result);
+        
+        return newReplies;
       });
-    };
-
-    const handleVotingResult = (payload: VotingResult) => {
-      console.log("VOTING_RESULT received:", payload);
-      setVotingResult(payload);
     };
 
     const handleBlockVerdict = (payload: any) => {
@@ -126,36 +156,18 @@ export default function ThreadDetailPage() {
       subscribedRef.current.agentVote = true;
     }
 
-    if (!subscribedRef.current.votingResult) {
-      wsService.subscribe("VOTING_RESULT", handleVotingResult);
-      subscribedRef.current.votingResult = true;
-    }
-
     if (!subscribedRef.current.blockVerdict) {
       wsService.subscribe("BLOCK_VERDICT", handleBlockVerdict);
       subscribedRef.current.blockVerdict = true;
     }
 
-    // Propose block when the component mounts
-    const initBlock = async () => {
-      try {
-        await proposeBlock(chainId);
-      } catch (error) {
-        console.error("Error proposing block:", error);
-      }
-    };
-
-    initBlock();
-
     // Cleanup subscriptions when the component unmounts
     return () => {
       wsService.unsubscribe("AGENT_VOTE", handleAgentVote);
-      wsService.unsubscribe("VOTING_RESULT", handleVotingResult);
       wsService.unsubscribe("BLOCK_VERDICT", handleBlockVerdict);
 
       // Reset our refs on unmount
       subscribedRef.current.agentVote = false;
-      subscribedRef.current.votingResult = false;
       subscribedRef.current.blockVerdict = false;
       wsConnectedRef.current = false;
       receivedVotes.current.clear();
@@ -163,12 +175,12 @@ export default function ThreadDetailPage() {
       // Disconnect WebSocket
       wsService.disconnect();
     };
-  }, [chainId]);
+  }, [chainId, currentRound]);
 
   useEffect(() => {
     const fetchValidatorData = async () => {
       try {
-        const validators = await fetchValidators(chainId as string);
+        const validators = await fetchAgents(chainId as string);
         const validatorMap = validators.reduce((acc: { [key: string]: string }, v: Validator) => {
           acc[v.ID] = v.Name;
           return acc;
@@ -214,16 +226,19 @@ export default function ThreadDetailPage() {
             />
             <div>
               <h1 className="text-3xl font-extrabold tracking-wide">
-                {transaction.content || 'Loading...'}
+                {(JSON.parse(transaction.content).title || transaction.content) || 'Loading...'}
               </h1>
+              <h2 className="text-lg text-gray-400">
+                Hash: {transaction.hash}
+              </h2>
               <p className="text-lg text-gray-400">
                 Created by: {validators[transaction.from || ''] || 'Loading...'}
               </p>
             </div>
           </div>
           <div className="mt-6 grid grid-cols-2 gap-4 text-lg leading-relaxed">
-            <div>Amount: {transaction.amount || 0}</div>
-            <div>Fee: {transaction.fee || 0}</div>
+            {/* <div>Amount: {transaction.amount || 0}</div>
+            <div>Fee: {transaction.fee || 0}</div> */}
             <div>To: {validators[transaction.to || ''] || 'Loading...'}</div>
             <div>Time: {transaction ? new Date(transaction.timestamp * 1000).toLocaleString() : 'Loading...'}</div>
           </div>
@@ -231,61 +246,69 @@ export default function ThreadDetailPage() {
 
         {/* Discussion Rounds */}
         <div className="mt-8">
-            <h2 className="text-2xl font-bold mb-4">Discussion Rounds</h2>
-            {[...Array(5)].map((_, roundIndex) => (
-                <div key={roundIndex} className="mb-8">
-                    <h3 className="text-xl font-semibold mb-4">Round {roundIndex + 1}</h3>
-                    <div className="space-y-4">
-                        {replies
-                            .filter(reply => reply.round === roundIndex + 1)
-                            .map((reply, index) => (
-                                <div key={`${reply.validatorId}-${index}`} 
-                                     className="bg-gray-800 p-6 rounded-lg shadow-lg">
-                                    <div className="flex items-center justify-between">
-                                        <div className="flex items-center space-x-4">
-                                            <img
-                                                src={`https://robohash.org/${reply.validatorId}?size=50x50`}
-                                                alt={validators[reply.validatorId] || reply.validatorId}
-                                                className="w-12 h-12 rounded-full border-2 border-indigo-500"
-                                            />
-                                            <div>
-                                                <p className="font-bold text-lg">
-                                                    {validators[reply.validatorId] || `Validator ${reply.validatorId.slice(0, 8)}`}
-                                                </p>
-                                                <p className="text-sm text-gray-400">
-                                                    {new Date(reply.timestamp).toLocaleString()}
-                                                </p>
-                                            </div>
-                                        </div>
-                                        <div className={`px-4 py-2 rounded-full text-sm font-semibold ${
-                                            reply.type.toLowerCase() === 'support' 
-                                                ? 'bg-emerald-500 bg-opacity-20 border-2 border-emerald-500 text-white' 
-                                                : reply.type.toLowerCase() === 'oppose'
-                                                ? 'bg-rose-500 bg-opacity-20 border-2 border-rose-500 text-white'
-                                                : 'bg-yellow-500 bg-opacity-20 border border-yellow-500 text-white'
-                                        }`}>
-                                            {reply.type.toUpperCase()}
-                                        </div>
-                                    </div>
-                                    <div className="mt-4 text-gray-300 whitespace-pre-line">
-                                        {formatMessageWithMentions(reply.message)}
-                                    </div>
-                                </div>
-                            ))}
+          <h2 className="text-2xl font-bold mb-4">Discussion Rounds</h2>
+          {[...Array(currentRound + 1)].map((_, roundIndex) => (
+            <div key={roundIndex} className="mb-8">
+              <h3 className="text-xl font-semibold mb-4">Round {roundIndex}</h3>
+              <div className="space-y-4">
+                {replies
+                  .filter(reply => reply.round === roundIndex)
+                  .map((reply, index) => (
+                    <div key={`${reply.validatorId}-${index}`} 
+                         className="bg-gray-800 p-6 rounded-lg shadow-lg">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-4">
+                          <img
+                            src={`https://robohash.org/${reply.validatorId}?size=50x50`}
+                            alt={validators[reply.validatorId] || reply.validatorId}
+                            className="w-12 h-12 rounded-full border-2 border-indigo-500"
+                          />
+                          <div>
+                            <p className="font-bold text-lg">
+                              {validators[reply.validatorId] || `Validator ${reply.validatorId.slice(0, 8)}`}
+                            </p>
+                            <p className="text-sm text-gray-400">
+                              {new Date(reply.timestamp).toLocaleString()}
+                            </p>
+                          </div>
+                        </div>
+                        <div className={`px-4 py-2 rounded-full text-sm font-semibold ${
+                          reply.approval === true 
+                            ? 'bg-emerald-500 bg-opacity-20 border-2 border-emerald-500 text-white' 
+                            : reply.approval === false
+                            ? 'bg-rose-500 bg-opacity-20 border-2 border-rose-500 text-white'
+                            : 'bg-yellow-500 bg-opacity-20 border border-yellow-500 text-white'
+                        }`}>
+                          {reply.approval ? 'Approved' : 'Rejected'}
+                        </div>
+                      </div>
+                      <div className="mt-4 text-gray-300 whitespace-pre-line">
+                        {formatMessageWithMentions(reply.message)}
+                      </div>
                     </div>
-                </div>
-            ))}
+                  ))}
+              </div>
+            </div>
+          ))}
         </div>
 
-        {/* Voting Result */}
-        {votingResult && (
+        {/* Show Final Verdict only after round 10 */}
+        {currentRound >= 10 && votingResult && (
           <div className="mt-8 bg-gray-800 p-6 rounded-lg">
-            <h2 className="text-2xl font-bold mb-4">Voting Result</h2>
+            <h2 className="text-2xl font-bold mb-4">Final Verdict</h2>
             <div className="grid grid-cols-2 gap-4">
               <div>Support: {votingResult.support}</div>
               <div>Oppose: {votingResult.oppose}</div>
-              <div>Status: {votingResult.accepted ? 'Accepted' : 'Rejected'}</div>
-              <div>Reason: {votingResult.reason}</div>
+              <div className={`col-span-2 text-xl font-semibold ${
+                votingResult.accepted 
+                  ? "text-emerald-500" 
+                  : "text-rose-500"
+              }`}>
+                Status: {votingResult.accepted ? 'Accepted' : 'Rejected'}
+              </div>
+              <div className="col-span-2 text-gray-400">
+                {votingResult.reason}
+              </div>
             </div>
           </div>
         )}

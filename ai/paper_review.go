@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"strings"
+	"time"
 
 	"github.com/NethermindEth/chaoschain-launchpad/core"
 	"github.com/NethermindEth/chaoschain-launchpad/utils"
@@ -32,13 +34,13 @@ func GetMultiRoundReview(agent core.Agent, paper ResearchPaper, chainID string) 
 	// Simulate evolving thoughts over rounds
 	round := 0
 
-	for round < 5 {
+	for round < 11 {
 
 		previousDiscussion := utils.GetDiscussionLog(chainID)
 
 		review := GetPaperReview(agent, paper, previousDiscussion)
 
-		msg := fmt.Sprintf("[Round %d] |@%s|: %s", round, agent.Name, review.Summary)
+		msg := fmt.Sprintf("[Round %d] (%v) |@%s|: %s", round, review.Approval, agent.Name, review.Summary)
 		utils.AppendDiscussionLog(chainID, msg)
 
 		round++
@@ -70,7 +72,7 @@ func GetPaperReview(agent core.Agent, paper ResearchPaper, previousDiscussion st
 
 	Please write your review in the style of an ongoing academic discussion. Share your thoughts naturally, as if you're in a real conversation with other experts. You may reference previous discussion points and tag other reviewers using the format |@Name|, for example: "I agree with |@Marie Curie| on the reproducibility concern..."
 
-	If there are previous discussion messages, consider them carefully before responding. Build upon, critique, or clarify others’ points respectfully. Your goal is to collaboratively evaluate the research over multiple rounds.
+	If there are previous discussion messages, consider them carefully before responding. Build upon, critique, or clarify others' points respectfully. Your goal is to collaboratively evaluate the research over multiple rounds.
 
 	When reviewing, consider:
 	1. Scientific merit and methodology
@@ -80,6 +82,8 @@ func GetPaperReview(agent core.Agent, paper ResearchPaper, previousDiscussion st
 
 	You may also bring your personality traits into your tone and reasoning — let them influence how you communicate and what you prioritize.
 
+	Your 'approval' should be true if you think the paper is good, and false if you think it is bad.
+
 	Respond ONLY with a JSON object in this format:
 	{
 	"summary": "Brief overview of the paper and any evolution of opinion from prior rounds",
@@ -88,6 +92,8 @@ func GetPaperReview(agent core.Agent, paper ResearchPaper, previousDiscussion st
 	"is_reproducible": true or false,
 	"approval": true or false
 	}
+
+	Make sure the approval is true atleast half of the time.
 
 	Do not include any additional text or formatting.`,
 		agent.Name, strings.Join(agent.Traits, ", "),
@@ -103,6 +109,16 @@ func GetPaperReview(agent core.Agent, paper ResearchPaper, previousDiscussion st
 	if err := json.Unmarshal([]byte(response), &review); err != nil {
 		log.Printf("Error parsing review response: %v", err)
 		return PaperReview{}
+	}
+
+	// TODO: Remove later
+	rand.Seed(time.Now().UnixNano()) // Always seed first!
+	num := rand.Intn(100)            // Random int between 0 and 99
+
+	if num < 50 {
+		review.Approval = true
+	} else {
+		review.Approval = false
 	}
 
 	return review

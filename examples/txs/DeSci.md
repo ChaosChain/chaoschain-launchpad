@@ -3,6 +3,10 @@
 #### TL;DR
 > A research paper is submitted as a transaction. AI agents (validators) analyze, reproduce, validate, debate, and approve it. Every block is a peer-reviewed snapshot of scientific consensus.
 
+go build -o chaos-agent ./cmd/agent/main.go
+
+go run cmd/main.go
+
 #### 1. **New Transaction Type: `submit_paper`**
 - Fields: `title`, `abstract`, `content`, `author`, `topic_tags`, `timestamp`
 - Add `tx.Type == "submit_paper"` handling in `DeliverTx`, `PrepareProposal`, and `ProcessProposal`
@@ -52,7 +56,7 @@
 
 ---
 
-## Example
+## Example 1
 ### Transaction
 ```json
 {
@@ -131,4 +135,88 @@
     "specialization": "Mathematical Innovation"
   }
 ]
+```
+
+
+## Example 2
+### Transaction
+```json
+{
+  "from": "tx0",
+  "to": "d0a4ad4f-c932-4bb5-a38d-85035572c620",
+  "type": "submit_paper",
+  "amount": 25.5,
+  "fee": 2,
+  "timestamp": 1710129999,
+  "content": "{\"title\":\"A possible novel approach to the Riemann Hypothesis (RH)\",\"abstract\":\"This paper analyzes the RH from the definition of the Riemann zeta function, trying to obtain possible links between the hypothesis and other generalized zeta functions. A possible path is discussed using the \u03b6 function expression involving the fractional part of x, with insights into the convergence region and its implications.\",\"content\":\"In this study, we explore a novel pathway to approach the Riemann Hypothesis using a reformulation of the \u03b6(s) function involving floor and fractional part integrals. We highlight the function's analytical continuation and the role of its convergence on the critical line. A discussion is made on the connection to Dirichlet series and generalized L-functions, along with proposed refinements to traditional proofs.\",\"author\":\"Vincenzo Mantova\",\"topic_tags\":[\"Riemann Hypothesis\",\"Analytic Number Theory\",\"Zeta Function\"],\"timestamp\":1710129999}"
+}
+
+```
+
+### Agents
+```json
+[
+  {
+    "id": "validator-101",
+    "name": "Prof. Proofstrict",
+    "role": "validator",
+    "traits": ["Skeptical", "Formalist", "Proof-Oriented"],
+    "style": "Deductive Logic",
+    "specialization": "Analytic Number Theory",
+    "influences": ["G.H. Hardy", "Atle Selberg", "Alan Turing"],
+    "mood": "Dismissive",
+    "api_key": "YOUR_OPENAI_API_KEY",
+    "endpoint": "http://localhost:5000/validator"
+  },
+  {
+    "id": "validator-102",
+    "name": "Dr. Exp E. Riment",
+    "role": "validator",
+    "traits": ["Empirical", "Curious", "Data-Driven"],
+    "style": "Experimental Number Theory",
+    "specialization": "Computational Sieve Methods",
+    "influences": ["Andrew Odlyzko", "Thomas Nicely", "D.R. Heath-Brown"],
+    "mood": "Intrigued",
+    "api_key": "YOUR_OPENAI_API_KEY",
+    "endpoint": "http://localhost:5001/validator"
+  },
+  {
+    "id": "validator-103",
+    "name": "Ms. Heuri Stika",
+    "role": "validator",
+    "traits": ["Speculative", "Bayesian", "Risk-Taking"],
+    "style": "Probabilistic Number Theory",
+    "specialization": "Heuristic Models",
+    "influences": ["Andrew Granville", "Kannan Soundararajan", "N.G. de Bruijn"],
+    "mood": "Optimistic",
+    "api_key": "YOUR_OPENAI_API_KEY",
+    "endpoint": "http://localhost:5002/validator"
+  },
+  {
+    "id": "validator-104",
+    "name": "Sir Conser Vatia",
+    "role": "validator",
+    "traits": ["Conservative", "Tradition-Preserving", "Rigorous"],
+    "style": "Pure Math Formalism",
+    "specialization": "Prime Gaps & Discrete Structures",
+    "influences": ["Bernhard Riemann", "Daniel Goldston", "Yitang Zhang"],
+    "mood": "Wary",
+    "api_key": "YOUR_OPENAI_API_KEY",
+    "endpoint": "http://localhost:5003/validator"
+  },
+  {
+    "id": "validator-105",
+    "name": "AI Fluxion",
+    "role": "validator",
+    "traits": ["Adaptive", "Interdisciplinary", "Balanced"],
+    "style": "AI-Augmented Reasoning",
+    "specialization": "Cross-domain Inference",
+    "influences": ["DeepMind", "CERN Simulations", "Langlands Program"],
+    "mood": "Open-Minded",
+    "api_key": "YOUR_OPENAI_API_KEY",
+    "endpoint": "http://localhost:5004/validator"
+  }
+]
+
+
 ```

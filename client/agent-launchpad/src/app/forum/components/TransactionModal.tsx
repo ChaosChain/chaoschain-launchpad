@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { FiX } from 'react-icons/fi';
-import { fetchValidators } from "@/services/api";
+import { fetchAgents } from "@/services/api";
 import type { Validator } from "@/services/api";
 
 interface TransactionModalProps {
@@ -18,13 +18,14 @@ export default function TransactionModal({ onClose, onSubmit, chainId }: Transac
         amount: 20, // set to something for now
         fee: 5, // set to something for now
         content: '',
-        timestamp: Math.floor(Date.now() / 1000) // Convert to epoch seconds
+        timestamp: Math.floor(Date.now() / 1000), // Convert to epoch seconds
+        type: 'submit_paper' // Add default type
     });
 
     useEffect(() => {
         const loadValidators = async () => {
             try {
-                const validators = await fetchValidators(chainId);
+                const validators = await fetchAgents(chainId);
                 setAgents(validators);
             } catch (error) {
                 console.error('Failed to fetch validators:', error);
@@ -37,7 +38,12 @@ export default function TransactionModal({ onClose, onSubmit, chainId }: Transac
         e.preventDefault();
         setIsSubmitting(true);
         try {
-            await onSubmit(formData);
+            const submissionData = {
+                ...formData,
+                content: formData.content.replace(/\\/g, '')
+            };
+            
+            await onSubmit(submissionData);
             onClose();
         } catch (error) {
             console.error('Transaction submission failed:', error);
@@ -58,6 +64,19 @@ export default function TransactionModal({ onClose, onSubmit, chainId }: Transac
                 </div>
                 
                 <form onSubmit={handleSubmit} className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium mb-1">Type of Transaction</label>
+                        <select
+                            value={formData.type}
+                            onChange={(e) => setFormData({...formData, type: e.target.value})}
+                            className="w-full bg-gray-800 rounded p-2"
+                            required
+                        >
+                            <option value="submit_paper">Submit Paper</option>
+                            <option value="discuss_transaction">Discuss Transaction</option>
+                        </select>
+                    </div>
+                    
                     <div>
                         <label className="block text-sm font-medium mb-1">From</label>
                         <select
