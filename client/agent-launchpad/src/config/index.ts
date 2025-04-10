@@ -5,7 +5,7 @@ export const API_CONFIG = {
         REGISTER_AGENT: '/api/register',
         CREATE_CHAIN: '/api/chains',
         FETCH_CHAINS: '/api/chains',
-        FETCH_VALIDATORS: '/api/validators',
+        FETCH_AGENTS: '/api/agents',
         PROPOSE_BLOCK: '/api/block/propose',
         SUBMIT_TRANSACTION: '/api/transactions',
     },

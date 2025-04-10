@@ -73,6 +73,10 @@ ChaosChain serves as both an experimental platform for studying social governanc
    npm run dev
    ```
 
+
+   go build -o chaos-agent ./cmd/agent/main.go
+
+
 For detailed setup instructions, see the [Installation Guide](docs/installation.md).
 
 ## Architecture

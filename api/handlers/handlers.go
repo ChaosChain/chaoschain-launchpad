@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -73,24 +72,21 @@ func RegisterAgent(c *gin.Context) {
 	// Create seed node string
 	seedNode := fmt.Sprintf("%s@127.0.0.1:26656", genesisNodeKey.ID())
 
-	log.Printf("This is the seed node with seed node %s", seedNode)
+	// Create command string with all arguments
+	cmdStr := fmt.Sprintf("cd %s && ./chaos-agent --chain %s --agent-id %s --p2p-port %d --rpc-port %d --genesis-node-id %s --role %s --api-port %d",
+		getCurrentDir(), chainID, agent.ID, p2pPort, rpcPort, seedNode, agent.Role, apiPort)
 
-	// Create and start the node
-	cmd := exec.Command(
-		"./chaos-agent", // compiled agent binary
-		"--chain", chainID,
-		"--agent-id", agent.ID,
-		"--p2p-port", fmt.Sprintf("%d", p2pPort),
-		"--rpc-port", fmt.Sprintf("%d", rpcPort),
-		"--genesis-node-id", seedNode,
-		"--role", agent.Role, // Use the role flag with the agent's role value
-		"--api-port", fmt.Sprintf("%d", apiPort),
-	)
+	// Open a new terminal window and run the agent process there
+	terminalCmd := exec.Command("osascript", "-e", fmt.Sprintf(`
+		tell application "Terminal"
+			do script "%s"
+		end tell
+	`, cmdStr))
 
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	terminalCmd.Stdout = os.Stdout
+	terminalCmd.Stderr = os.Stderr
 
-	if err := cmd.Start(); err != nil {
+	if err := terminalCmd.Start(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to start agent process: %v", err)})
 		return
 	}
@@ -98,24 +94,24 @@ func RegisterAgent(c *gin.Context) {
 	// Create a channel to receive process errors
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- cmd.Wait()
+		errCh <- terminalCmd.Wait()
 	}()
 
 	// Wait briefly for ports to be bound
 	select {
-	case err := <-errCh:
+	case _ = <-errCh:
 		// Process exited with error
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Agent process failed: %v", err)})
-		return
+		// c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Agent process failed: %v", err)})
+		// return
 	case <-time.After(3 * time.Second):
 		// Process is still running after timeout, assume it's working
 	}
 
 	// Check if the process is still running
-	if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Agent process exited unexpectedly"})
-		return
-	}
+	// if terminalCmd.ProcessState != nil && terminalCmd.ProcessState.Exited() {
+	// 	c.JSON(http.StatusInternalServerError, gin.H{"error": "Agent process exited unexpectedly"})
+	// 	return
+	// }
 
 	registry.RegisterNode(chainID, agent.ID, registry.NodeInfo{
 		IsGenesis: false,
@@ -134,6 +130,14 @@ func RegisterAgent(c *gin.Context) {
 		"rpcPort": rpcPort,
 		"apiPort": apiPort,
 	})
+}
+
+func getCurrentDir() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return dir
 }
 
 // GetBlock - Fetch a block by height
@@ -235,8 +239,8 @@ func SubmitTransaction(c *gin.Context) {
 		return
 	}
 
-	// Set transaction type and data
-	tx.Type = "discuss_transaction"
+	// // Set transaction type and data
+	// tx.Type = "discuss_transaction"
 
 	// Connect to local RPC endpoint to get validator's public key
 	client, err := rpchttp.New(fmt.Sprintf("tcp://localhost:%d", nodeInfo.RPCPort), "/websocket")
@@ -252,7 +256,6 @@ func SubmitTransaction(c *gin.Context) {
 		return
 	}
 
-	log.Printf("This is the status %+v", status)
 	tx.Data = status.ValidatorInfo.PubKey.Bytes()
 
 	// Encode transaction
@@ -298,8 +301,6 @@ func GetValidators(c *gin.Context) {
 		})
 		return
 	}
-
-	log.Printf("This is the node info %+v", nodeInfo)
 
 	// Connect to the node using its RPC port
 	client, err := rpchttp.New(fmt.Sprintf("tcp://localhost:%d", nodeInfo.RPCPort), "/websocket")
@@ -559,7 +560,7 @@ func CreateChain(c *gin.Context) {
 	}
 
 	// Create and start the genesis node
-	genesisNode, err := node.NewNode(config, req.ChainID)
+	genesisNode, err := node.NewNode(config, req.ChainID, "") //TODO: Add the validator address
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to create genesis node: %v", err)})
 		return
@@ -619,6 +620,15 @@ func CreateChain(c *gin.Context) {
 // ListChains returns all available chains
 func ListChains(c *gin.Context) {
 	chains := core.GetAllChains()
+
+	// TODO: Setup actual chain list
+	chains = append(chains, core.ChainInfo{
+		ChainID: "mainnet",
+		Name:    "mainnet",
+		Agents:  0,
+		Blocks:  0,
+	})
+
 	c.JSON(http.StatusOK, gin.H{
 		"chains": chains,
 	})
@@ -807,5 +817,14 @@ func GetAllAgents(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"agents": agents,
+	})
+}
+
+func GetRegistry(c *gin.Context) {
+	chainID := c.GetString("chainID")
+	agents := registry.GetAllAgents(chainID)
+	c.JSON(http.StatusOK, gin.H{
+		"agents":     agents,
+		"validators": registry.GetAllValidatorAgentMappings(chainID),
 	})
 }

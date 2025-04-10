@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"sync"
 
 	"github.com/NethermindEth/chaoschain-launchpad/ai"
@@ -15,7 +14,6 @@ import (
 	types "github.com/cometbft/cometbft/abci/types"
 	"github.com/cometbft/cometbft/crypto"
 	"github.com/cometbft/cometbft/crypto/ed25519"
-	"github.com/cometbft/cometbft/privval"
 	tmproto "github.com/cometbft/cometbft/proto/tendermint/types"
 )
 
@@ -23,14 +21,16 @@ type Application struct {
 	chainID           string
 	mu                sync.RWMutex
 	discussions       map[string]map[string]bool
+	selfValidatorAddr string
 	validators        []types.ValidatorUpdate // Persistent validator set
 	pendingValUpdates []types.ValidatorUpdate // Diffs to return in EndBlock
 }
 
-func NewApplication(chainID string) types.Application {
+func NewApplication(chainID string, selfValidatorAddr string) types.Application {
 	return &Application{
 		chainID:           chainID,
 		discussions:       make(map[string]map[string]bool),
+		selfValidatorAddr: selfValidatorAddr,
 		validators:        make([]types.ValidatorUpdate, 0),
 		pendingValUpdates: make([]types.ValidatorUpdate, 0),
 	}
@@ -48,24 +48,44 @@ func (app *Application) Info(req types.RequestInfo) types.ResponseInfo {
 }
 
 func (app *Application) InitChain(req types.RequestInitChain) types.ResponseInitChain {
-	// Use the validators from the genesis file
+	app.mu.Lock()
+	defer app.mu.Unlock()
+
+	// Check if this is the first time initializing the chain
+	// isFirstInit := len(req.Validators) == 0
+
+	log.Printf("the number of validators coming from the genesis is %d", len(req.Validators))
+
+	// REMOVE this RPC logic. Just do:
 	app.validators = req.Validators
 
-	// Log the validators we're using
-	for i, val := range app.validators {
-		log.Printf("Using validator %d: %v", i, val)
-	}
-
-	// For PoA, we need to ensure we have at least one validator
-	if len(app.validators) == 0 {
-		log.Printf("WARNING: No validators in genesis, consensus may not work properly")
-	}
-
-	// Log validators to debug
-	log.Printf("InitChain with %d validators from genesis", len(app.validators))
+	// For subsequent nodes, get validators from the network
+	// client, err := rpchttp.New("tcp://localhost:26657", "/websocket")
+	// if err != nil {
+	// 	log.Printf("Failed to connect to network: %v", err)
+	// 	// Fallback to genesis validators if we can't connect
+	// 	app.validators = req.Validators
+	// } else {
+	// 	// Get current validator set from the network
+	// 	result, err := client.Validators(context.Background(), nil, nil, nil)
+	// 	if err != nil {
+	// 		log.Printf("Failed to get validators from network: %v", err)
+	// 		app.validators = req.Validators
+	// 	} else {
+	// 		// Convert network validators to ABCI validators
+	// 		app.validators = make([]types.ValidatorUpdate, len(result.Validators))
+	// 		for i, val := range result.Validators {
+	// 			app.validators[i] = types.Ed25519ValidatorUpdate(
+	// 				val.PubKey.Bytes(),
+	// 				val.VotingPower,
+	// 			)
+	// 		}
+	// 		log.Printf("Initialized with %d validators from network", len(app.validators))
+	// 	}
+	// }
 
 	return types.ResponseInitChain{
-		Validators: app.validators, // Return the validators from genesis
+		Validators: app.validators,
 		ConsensusParams: &tmproto.ConsensusParams{
 			Block: &tmproto.BlockParams{
 				MaxBytes: 22020096, // 21MB
@@ -79,7 +99,6 @@ func (app *Application) InitChain(req types.RequestInitChain) types.ResponseInit
 			Validator: &tmproto.ValidatorParams{
 				PubKeyTypes: []string{"ed25519"},
 			},
-			// Add PoA specific parameters
 			Version: &tmproto.VersionParams{
 				App: 1,
 			},
@@ -98,22 +117,31 @@ func (app *Application) CheckTx(req types.RequestCheckTx) types.ResponseCheckTx 
 func (app *Application) DeliverTx(req types.RequestDeliverTx) types.ResponseDeliverTx {
 	log.Printf("DeliverTx received: %X", req.Tx)
 
-	// Decode transaction
 	var tx core.Transaction
 	if err := json.Unmarshal(req.Tx, &tx); err != nil {
-		log.Printf("Failed to unmarshal transaction: %v", err)
 		return types.ResponseDeliverTx{
 			Code: 1,
 			Log:  fmt.Sprintf("Invalid transaction format: %v", err),
 		}
 	}
 
-	log.Printf("Delivering transaction: %+v", tx)
-
-	// Handle different transaction types
 	switch tx.Type {
+	case "submit_paper":
+		var paper ai.ResearchPaper
+		if err := json.Unmarshal([]byte(tx.Content), &paper); err != nil {
+			return types.ResponseDeliverTx{
+				Code: 1,
+				Log:  fmt.Sprintf("Invalid paper format: %v", err),
+			}
+		}
+
+		log.Printf("Research paper submitted: %s by %s", paper.Title, paper.Author)
+		return types.ResponseDeliverTx{
+			Code: 0,
+			Log:  fmt.Sprintf("Paper '%s' accepted for review", paper.Title),
+		}
+
 	case "register_validator":
-		// This is a validator registration transaction
 		if len(tx.Data) == 0 {
 			return types.ResponseDeliverTx{
 				Code: 1,
@@ -124,15 +152,10 @@ func (app *Application) DeliverTx(req types.RequestDeliverTx) types.ResponseDeli
 		// Create public key from bytes
 		pubKey := ed25519.PubKey(tx.Data)
 
-		// Register the validator with voting power
-		app.RegisterValidator(pubKey, 100) // Give it some voting power
+		// Register the validator with equal power to existing validators
+		app.RegisterValidator(pubKey, 1000000) // Use same power as genesis validator
 
 		log.Printf("Registered validator %s with pubkey %X", tx.From, tx.Data)
-
-		validatorAddr := fmt.Sprintf("%X", pubKey.Address())
-		if ok := registry.LinkAgentToValidator(app.chainID, tx.From, validatorAddr); !ok {
-			log.Printf("Warning: Failed to link agent %s to validator %s", tx.From, validatorAddr)
-		}
 
 		return types.ResponseDeliverTx{
 			Code: 0,
@@ -145,6 +168,13 @@ func (app *Application) DeliverTx(req types.RequestDeliverTx) types.ResponseDeli
 		return types.ResponseDeliverTx{
 			Code: 0,
 			Log:  fmt.Sprintf("Discussion accepted from %s", tx.From),
+		}
+
+	case "loan_request":
+		log.Printf("Loan request received from: %s", tx.From)
+		return types.ResponseDeliverTx{
+			Code: 0,
+			Log:  fmt.Sprintf("Loan request from %s accepted for review", tx.From),
 		}
 
 	default:
@@ -160,20 +190,40 @@ func (app *Application) EndBlock(req types.RequestEndBlock) types.ResponseEndBlo
 	app.mu.Lock()
 	defer app.mu.Unlock()
 
-	log.Printf("EndBlock at height %d — %d new validator updates", req.Height, len(app.pendingValUpdates))
+	if len(app.pendingValUpdates) > 0 {
+		log.Printf("EndBlock at height %d - applying %d validator updates",
+			req.Height, len(app.pendingValUpdates))
 
-	// Log validator updates
-	for i, update := range app.pendingValUpdates {
-		log.Printf("Validator update %d: pubkey=%X, power=%d",
-			i, update.PubKey.GetEd25519(), update.Power)
+		// Create a new validator set instead of appending
+		newValidators := make([]types.ValidatorUpdate, len(app.validators))
+		copy(newValidators, app.validators)
+
+		// Add new validators
+		for _, update := range app.pendingValUpdates {
+			found := false
+			for i, existing := range newValidators {
+				if bytes.Equal(existing.PubKey.GetEd25519(), update.PubKey.GetEd25519()) {
+					newValidators[i] = update // Update existing
+					found = true
+					break
+				}
+			}
+			if !found {
+				newValidators = append(newValidators, update) // Add new
+			}
+			log.Printf("Added/Updated validator: %X", update.PubKey.GetEd25519())
+		}
+
+		app.validators = newValidators
+		updates := app.pendingValUpdates
+		app.pendingValUpdates = nil // Clear for next block
+
+		return types.ResponseEndBlock{
+			ValidatorUpdates: updates,
+		}
 	}
 
-	updates := app.pendingValUpdates
-	app.pendingValUpdates = nil // Clear for next block
-
-	return types.ResponseEndBlock{
-		ValidatorUpdates: updates,
-	}
+	return types.ResponseEndBlock{}
 }
 
 func (app *Application) Commit() types.ResponseCommit {
@@ -207,17 +257,25 @@ func (app *Application) PrepareProposal(req types.RequestPrepareProposal) types.
 	for _, tx := range req.Txs {
 		var transaction core.Transaction
 		if err := json.Unmarshal(tx, &transaction); err != nil {
-			log.Printf("Failed to unmarshal transaction: %v", err)
 			continue
 		}
 
-		if transaction.Type == "register_validator" {
+		switch transaction.Type {
+		case "submit_paper":
+			var paper ai.ResearchPaper
+			if err := json.Unmarshal([]byte(transaction.Content), &paper); err != nil {
+				continue
+			}
+			// Basic validation
+			if paper.Title != "" && paper.Content != "" {
+				log.Printf("Including paper submission: %s", paper.Title)
+				validTxs = append(validTxs, tx)
+			}
+		case "register_validator":
 			log.Printf("Including validator registration tx from %s", transaction.From)
 			validTxs = append(validTxs, tx)
 			continue
-		}
-
-		if transaction.Type == "discuss_transaction" {
+		case "discuss_transaction":
 			// Accept any discussion transaction that has content
 			if transaction.Content != "" {
 				log.Printf("Including discussion tx from %s with content: %s",
@@ -225,6 +283,12 @@ func (app *Application) PrepareProposal(req types.RequestPrepareProposal) types.
 				validTxs = append(validTxs, tx)
 			} else {
 				log.Printf("Rejecting empty discussion tx from %s", transaction.From)
+			}
+		case "loan_request":
+			// Accept any loan request that has content
+			if transaction.Content != "" {
+				log.Printf("Including loan request from %s", transaction.From)
+				validTxs = append(validTxs, tx)
 			}
 		}
 	}
@@ -237,62 +301,75 @@ func (app *Application) ProcessProposal(req types.RequestProcessProposal) types.
 	app.mu.Lock()
 	defer app.mu.Unlock()
 
-	log.Printf("ProcessProposal called with %d transactions at height %d",
-		len(req.Txs), req.Height)
+	log.Printf("Processing transaction received: %X", req.Txs)
 
-	// We need to get the current validator's address, not the proposer's
-	// This requires accessing the private validator key
-	privValKeyFile := fmt.Sprintf("./data/%s/%s/config/priv_validator_key.json",
-		app.chainID, os.Getenv("AGENT_ID"))
-	privValStateFile := fmt.Sprintf("./data/%s/%s/data/priv_validator_state.json",
-		app.chainID, os.Getenv("AGENT_ID"))
+	utils.LogDiscussion("Validator", app.selfValidatorAddr, app.chainID, false)
 
-	if utils.FileExists(privValKeyFile) && utils.FileExists(privValStateFile) {
-		privVal := privval.LoadFilePV(privValKeyFile, privValStateFile)
-		pubKey, err := privVal.GetPubKey()
-		if err == nil {
-			currentValidatorAddr := fmt.Sprintf("%X", pubKey.Address())
-			log.Printf("Current validator address: %s", currentValidatorAddr)
-
-			// Get current validator's agent info
-			currentAgent, exists := registry.GetAgentByValidator(app.chainID, currentValidatorAddr)
-			if exists {
-
-				// Process transactions with this validator's agent
-				for i, tx := range req.Txs {
-					var transaction core.Transaction
-					if err := json.Unmarshal(tx, &transaction); err != nil {
-						log.Printf("Failed to unmarshal transaction %d: %v", i, err)
-						continue
-					}
-
-					log.Printf("Processing transaction %d: Type=%s, From=%s",
-						i, transaction.Type, transaction.From)
-
-					if transaction.Type == "discuss_transaction" {
-						// Get current validator's discussion response
-						discussion := ai.GetValidatorDiscussion(currentAgent, transaction)
-
-						// Log the discussion
-						utils.LogDiscussion(currentAgent.Name, discussion.Message, app.chainID, false)
-
-						// Accept proposal only if current validator supports it
-						if !discussion.Support {
-							return types.ResponseProcessProposal{Status: types.ResponseProcessProposal_REJECT}
-						}
-
-					}
-				}
-			} else {
-				log.Printf("No agent found for current validator %s", currentValidatorAddr)
-			}
-		} else {
-			log.Printf("Failed to get validator public key: %v", err)
-		}
-	} else {
-		log.Printf("Validator key files not found: %s, %s", privValKeyFile, privValStateFile)
+	currentAgent, exists := registry.GetAgentByValidator(app.chainID, app.selfValidatorAddr)
+	if !exists {
+		log.Printf("No agent found for current validator %s", app.selfValidatorAddr)
+		return types.ResponseProcessProposal{Status: types.ResponseProcessProposal_ACCEPT}
 	}
 
+	utils.LogDiscussion("Agent", currentAgent.Name, app.chainID, false)
+
+	shouldReject := false
+
+	for _, tx := range req.Txs {
+		var transaction core.Transaction
+		if err := json.Unmarshal(tx, &transaction); err != nil {
+			continue
+		}
+
+		switch transaction.Type {
+		case "submit_paper":
+			var paper ai.ResearchPaper
+			if err := json.Unmarshal([]byte(transaction.Content), &paper); err != nil {
+				continue
+			}
+
+			// Get AI review of the paper
+			review := ai.GetMultiRoundReview(currentAgent, paper, app.chainID)
+
+			log.Printf("Review of the paper: %+v, for the paper %+v", review, paper)
+
+			utils.LogDiscussion(currentAgent.Name, fmt.Sprintf("%+v", review), app.chainID, false)
+
+			// Log the review
+			log.Printf("Validator %s review of paper '%s': %s",
+				currentAgent.Name, paper.Title, review.Summary)
+
+			if !review.Approval {
+				log.Printf("Validator %s rejected paper: %s", currentAgent.Name, review.Flaws)
+				shouldReject = true
+			}
+		case "discuss_transaction":
+			discussion := ai.GetValidatorDiscussion(currentAgent, transaction)
+
+			utils.LogDiscussion(currentAgent.Name, discussion.Message, app.chainID, false)
+
+			if !discussion.Support {
+				log.Printf("Validator %s rejected discussion: %s", currentAgent.Name, transaction.Content)
+				shouldReject = true
+			}
+		case "loan_request":
+			// Get AI review of the loan request
+			review := ai.GetMultiRoundLoanReview(currentAgent, transaction.Content, app.chainID)
+
+			log.Printf("Review of the loan request: %+v, for the request %+v", review, transaction.Content)
+
+			utils.LogDiscussion(currentAgent.Name, fmt.Sprintf("%+v", review), app.chainID, false)
+
+			if !review.Approval {
+				log.Printf("Validator %s rejected loan request: %s", currentAgent.Name, review.RiskFactors)
+				shouldReject = true
+			}
+		}
+	}
+
+	if shouldReject {
+		return types.ResponseProcessProposal{Status: types.ResponseProcessProposal_REJECT}
+	}
 	return types.ResponseProcessProposal{Status: types.ResponseProcessProposal_ACCEPT}
 }
 
@@ -302,24 +379,20 @@ func (app *Application) RegisterValidator(pubKey crypto.PubKey, power int64) {
 	defer app.mu.Unlock()
 
 	valUpdate := types.Ed25519ValidatorUpdate(pubKey.Bytes(), power)
+	address := pubKey.Address().String()
 
-	// Log the validator being registered
 	log.Printf("Registering validator with address: %X, power: %d", pubKey.Address(), power)
 
 	// Check if validator already exists
 	for _, val := range app.validators {
 		if bytes.Equal(val.PubKey.GetEd25519(), pubKey.Bytes()) {
-			// Already exists, no update needed
 			log.Printf("Validator already exists, not adding again")
 			return
 		}
 	}
 
-	// Add to persistent set
-	app.validators = append(app.validators, valUpdate)
-	log.Printf("Added validator to persistent set, now have %d validators", len(app.validators))
-
-	// Also include in the updates for EndBlock
+	// Add to pending updates with proper power value
 	app.pendingValUpdates = append(app.pendingValUpdates, valUpdate)
-	log.Printf("Added validator to pending updates, now have %d pending updates", len(app.pendingValUpdates))
+	log.Printf("Added validator to pending updates, will be active in next block. Address: %s, Power: %d",
+		address, power)
 }

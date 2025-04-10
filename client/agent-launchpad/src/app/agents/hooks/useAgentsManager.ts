@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { registerAgent, fetchValidators, ApiError } from "@/services/api";
+import { registerAgent, ApiError, fetchAgents } from "@/services/api";
 
 // Shared Agent interface
 export interface Agent {
@@ -23,7 +23,8 @@ export function useAgentsManager(chainId: string) {
     const loadExistingAgents = async () => {
       try {
         setIsLoading(true);
-        const validators = await fetchValidators(chainId);
+        const validators = await fetchAgents(chainId);
+        console.log(validators);
         setAgents(validators.map(v => ({
           id: v.ID,
           name: v.Name,
