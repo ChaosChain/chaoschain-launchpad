@@ -1,51 +1,34 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
-	"sync"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
-	"github.com/nats-io/nats.go"
+
+	"hash/crc32"
 
 	"github.com/NethermindEth/chaoschain-launchpad/ai"
 	"github.com/NethermindEth/chaoschain-launchpad/cmd/node"
 	"github.com/NethermindEth/chaoschain-launchpad/communication"
-	"github.com/NethermindEth/chaoschain-launchpad/consensus"
 	"github.com/NethermindEth/chaoschain-launchpad/core"
 	da "github.com/NethermindEth/chaoschain-launchpad/da_layer"
-	"github.com/NethermindEth/chaoschain-launchpad/mempool"
-	"github.com/NethermindEth/chaoschain-launchpad/p2p"
-	"github.com/NethermindEth/chaoschain-launchpad/producer"
 	"github.com/NethermindEth/chaoschain-launchpad/registry"
+	"github.com/NethermindEth/chaoschain-launchpad/utils"
 	"github.com/NethermindEth/chaoschain-launchpad/validator"
+	cfg "github.com/cometbft/cometbft/config"
+	"github.com/cometbft/cometbft/p2p"
+	"github.com/cometbft/cometbft/privval"
+	rpchttp "github.com/cometbft/cometbft/rpc/client/http"
+	"github.com/cometbft/cometbft/types"
 )
-
-var (
-	lastUsedPort         = 8080
-	portMutex            sync.Mutex
-	agentIdentitiesMutex sync.RWMutex
-)
-
-func findAvailablePort() int {
-	portMutex.Lock()
-	defer portMutex.Unlock()
-	lastUsedPort++
-	return lastUsedPort
-}
-
-func findAvailableAPIPort() int {
-	portMutex.Lock()
-	defer portMutex.Unlock()
-	lastUsedPort++
-	return lastUsedPort
-}
 
 // Add at the top with other types
 type RelationshipUpdate struct {
@@ -57,109 +40,104 @@ type RelationshipUpdate struct {
 // RegisterAgent - Registers a new AI agent (Producer or Validator)
 func RegisterAgent(c *gin.Context) {
 	chainID := c.GetString("chainID")
-	chain := core.GetChain(chainID)
-	if chain == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Chain not found"})
-		return
-	}
-
 	var agent core.Agent
 	if err := c.ShouldBindJSON(&agent); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid agent data"})
 		return
 	}
 
-	// Assign a unique ID
-	agent.ID = uuid.New().String()
+	// Register agent in registry
+	registry.RegisterAgent(chainID, agent)
 
-	// Get bootstrap node's P2P instance
-	var bootstrapNode *p2p.Node
-	chain.NodesMu.RLock()
-	for _, node := range chain.Nodes {
-		bootstrapNode = node
-		break // Get first node
-	}
-	chain.NodesMu.RUnlock()
+	// Assign specific ports based on agent ID
+	basePort := 26656
+	agentIDInt := int(crc32.ChecksumIEEE([]byte(agent.ID)))
+	p2pPort := basePort + (agentIDInt % 10000)
+	rpcPort := p2pPort + 1
+	apiPort := p2pPort + 2
 
-	if bootstrapNode == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "No bootstrap node found for chain"})
+	if p2pPort == 26656 || rpcPort == 26657 {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Agent port conflicts with Genesis node"})
 		return
 	}
 
-	bootstrapPort := bootstrapNode.GetPort()
-	if bootstrapPort == 0 {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Bootstrap node not ready"})
+	// Get genesis node ID from its node_key.json
+	genesisNodeKeyFile := fmt.Sprintf("./data/%s/genesis/config/node_key.json", chainID)
+	genesisNodeKey, err := p2p.LoadNodeKey(genesisNodeKeyFile)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load genesis node key"})
 		return
 	}
 
-	log.Printf("Found bootstrap node at port: %d", bootstrapPort)
+	// Create seed node string
+	seedNode := fmt.Sprintf("%s@127.0.0.1:26656", genesisNodeKey.ID())
 
-	// Create a new node for this agent
-	newPort := findAvailablePort()
-	agentNode := node.NewNode(node.NodeConfig{
-		ChainConfig: p2p.ChainConfig{
-			ChainID: chainID,
-			P2PPort: newPort,
-			APIPort: findAvailableAPIPort(),
-		},
-		BootstrapNode: fmt.Sprintf("localhost:%d", bootstrapPort),
+	// Create command string with all arguments
+	cmdStr := fmt.Sprintf("cd %s && ./chaos-agent --chain %s --agent-id %s --p2p-port %d --rpc-port %d --genesis-node-id %s --role %s --api-port %d",
+		getCurrentDir(), chainID, agent.ID, p2pPort, rpcPort, seedNode, agent.Role, apiPort)
+
+	// Open a new terminal window and run the agent process there
+	terminalCmd := exec.Command("osascript", "-e", fmt.Sprintf(`
+		tell application "Terminal"
+			do script "%s"
+		end tell
+	`, cmdStr))
+
+	terminalCmd.Stdout = os.Stdout
+	terminalCmd.Stderr = os.Stderr
+
+	if err := terminalCmd.Start(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to start agent process: %v", err)})
+		return
+	}
+
+	// Create a channel to receive process errors
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- terminalCmd.Wait()
+	}()
+
+	// Wait briefly for ports to be bound
+	select {
+	case _ = <-errCh:
+		// Process exited with error
+		// c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Agent process failed: %v", err)})
+		// return
+	case <-time.After(3 * time.Second):
+		// Process is still running after timeout, assume it's working
+	}
+
+	// Check if the process is still running
+	// if terminalCmd.ProcessState != nil && terminalCmd.ProcessState.Exited() {
+	// 	c.JSON(http.StatusInternalServerError, gin.H{"error": "Agent process exited unexpectedly"})
+	// 	return
+	// }
+
+	registry.RegisterNode(chainID, agent.ID, registry.NodeInfo{
+		IsGenesis: false,
+		Name:      agent.ID,
+		P2PPort:   p2pPort,
+		RPCPort:   rpcPort,
+		APIPort:   apiPort,
 	})
-
-	if err := agentNode.Start(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start agent node"})
-		return
-	}
-
-	// Register the new node with the correct chain
-	addr := fmt.Sprintf("localhost:%d", newPort)
-
-	chain.RegisterNode(addr, agentNode.GetP2PNode())
-
-	if agent.Role == "producer" {
-		personality := ai.Personality{
-			Name:   agent.Name,
-			Traits: agent.Traits,
-			Style:  agent.Style,
-		}
-
-		// Get mempool safely
-		mp, ok := agentNode.GetMempool().(*mempool.Mempool)
-		if !ok {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid mempool type"})
-			return
-		}
-
-		// Create producer on its own node
-		producerInstance := producer.NewProducer(mp, personality, agentNode.GetP2PNode())
-
-		// Register on the agent's node
-		registry.RegisterProducer(chainID, agent.ID, producerInstance)
-
-	} else if agent.Role == "validator" {
-		validatorInstance := validator.NewValidator(
-			agent.ID,
-			agent.Name,
-			agent.Traits,
-			agent.Style,
-			agent.Influences,
-			agentNode.GetP2PNode(),
-		)
-
-		// Register on the agent's node
-		registry.RegisterValidator(chainID, agent.ID, validatorInstance)
-	} else {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid agent role"})
-		return
-	}
 
 	communication.BroadcastEvent(communication.EventAgentRegistered, agent)
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Agent registered successfully",
 		"agentID": agent.ID,
-		"p2pPort": newPort,
-		"apiPort": agentNode.GetAPIPort(),
+		"p2pPort": p2pPort,
+		"rpcPort": rpcPort,
+		"apiPort": apiPort,
 	})
+}
+
+func getCurrentDir() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return dir
 }
 
 // GetBlock - Fetch a block by height
@@ -171,48 +149,89 @@ func GetBlock(c *gin.Context) {
 		return
 	}
 
-	chain := core.GetChain(chainID)
-	if chain == nil {
+	// Connect to the specific chain's node using chainID
+	rpcPort, err := registry.GetRPCPortForChain(chainID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Chain not found: %v", err)})
+		return
+	}
+
+	client, err := rpchttp.New(fmt.Sprintf("tcp://localhost:%d", rpcPort), "/websocket")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to connect to node: %v", err)})
+		return
+	}
+
+	// Verify we're connected to the right chain
+	status, err := client.Status(context.Background())
+	if err != nil || status.NodeInfo.Network != chainID {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Chain not found"})
 		return
 	}
 
-	if height < 0 || height >= len(chain.Blocks) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Block not found"})
+	// Get block at height
+	heightPtr := new(int64)
+	*heightPtr = int64(height)
+	block, err := client.Block(context.Background(), heightPtr)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Failed to get block: %v", err)})
 		return
 	}
-	block := chain.Blocks[height]
 
-	c.JSON(http.StatusOK, gin.H{"block": block})
+	// Transform block data for response
+	blockData := gin.H{
+		"height":     block.Block.Height,
+		"hash":       block.Block.Hash(),
+		"timestamp":  block.Block.Time,
+		"numTxs":     len(block.Block.Txs),
+		"proposer":   block.Block.ProposerAddress,
+		"validators": block.Block.LastCommit.Signatures,
+	}
+
+	c.JSON(http.StatusOK, gin.H{"block": blockData})
 }
 
 // GetNetworkStatus - Returns the current status of ChaosChain
 func GetNetworkStatus(c *gin.Context) {
-	chainID := c.GetString("chainID")
-	bc := core.GetChain(chainID)
-	if bc == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Chain not found"})
+	_ = c.GetString("chainID")
+
+	client, err := rpchttp.New("tcp://localhost:26657", "/websocket")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to connect to node"})
 		return
 	}
 
-	// Get node count for this chain
-	bc.NodesMu.RLock()
-	nodeCount := len(bc.Nodes)
-	bc.NodesMu.RUnlock()
-
-	status := map[string]interface{}{
-		"height":     len(bc.Blocks) - 1,
-		"latestHash": bc.Blocks[len(bc.Blocks)-1].Hash(),
-		"totalTxs":   len(bc.Blocks[len(bc.Blocks)-1].Txs),
-		"nodeCount":  nodeCount,
+	// Get network info
+	netInfo, err := client.NetInfo(context.Background())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get network info"})
+		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": status})
+	networkStatus := gin.H{
+		"netInfo": netInfo,
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": networkStatus})
 }
 
 // SubmitTransaction - Allows an agent to submit a transaction
 func SubmitTransaction(c *gin.Context) {
 	chainID := c.GetString("chainID")
+
+	// Get port from Host header
+	host := c.Request.Host
+	apiPort := ""
+	if i := strings.LastIndex(host, ":"); i != -1 {
+		apiPort = host[i+1:]
+	}
+
+	// Get node info from API port
+	_, nodeInfo, found := registry.GetNodeByAPIPort(chainID, apiPort)
+	if !found {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Node not recognized"})
+		return
+	}
 
 	var tx core.Transaction
 	if err := c.ShouldBindJSON(&tx); err != nil {
@@ -220,51 +239,86 @@ func SubmitTransaction(c *gin.Context) {
 		return
 	}
 
-	// Set the chainID on the transaction
-	tx.ChainID = chainID
+	// // Set transaction type and data
+	// tx.Type = "discuss_transaction"
 
-	// In production, you would get the private key from secure storage
-	privateKey, err := core.GenerateKeyPair()
+	// Connect to local RPC endpoint to get validator's public key
+	client, err := rpchttp.New(fmt.Sprintf("tcp://localhost:%d", nodeInfo.RPCPort), "/websocket")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate key"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to connect to node: %v", err)})
 		return
 	}
 
-	// Sign the transaction
-	if err := tx.SignTransaction(privateKey); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to sign transaction"})
+	// Get validator's public key
+	status, err := client.Status(context.Background())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get node status: %v", err)})
 		return
 	}
 
-	// Process the signed transaction
-	bc := core.GetChain(chainID)
-	if bc == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Chain not found"})
+	tx.Data = status.ValidatorInfo.PubKey.Bytes()
+
+	// Encode transaction
+	txBytes, err := tx.Marshal()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to encode transaction"})
 		return
 	}
 
-	// Get the chain's mempool
-	mp := mempool.GetMempool(chainID)
-	if mp == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Mempool not found for chain"})
-		return
-	}
-
-	if err := bc.ProcessTransaction(tx, mp); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Transaction failed: " + err.Error()})
+	// Submit transaction to CometBFT
+	result, err := client.BroadcastTxSync(context.Background(), txBytes)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to broadcast tx: %v", err)})
 		return
 	}
 
 	communication.BroadcastEvent(communication.EventNewTransaction, tx)
 
-	c.JSON(http.StatusOK, gin.H{"message": "Transaction submitted successfully"})
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Transaction submitted successfully",
+		"hash":    result.Hash.String(),
+	})
 }
 
 // GetValidators - Returns the list of registered validators
 func GetValidators(c *gin.Context) {
 	chainID := c.GetString("chainID")
-	validatorsList := validator.GetAllValidators(chainID)
-	c.JSON(http.StatusOK, gin.H{"validators": validatorsList})
+
+	// Get port from Host header
+	host := c.Request.Host
+	apiPort := ""
+	if i := strings.LastIndex(host, ":"); i != -1 {
+		apiPort = host[i+1:]
+	}
+
+	// Get node info from API port
+	_, nodeInfo, found := registry.GetNodeByAPIPort(chainID, apiPort)
+	if !found {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error":   fmt.Sprintf("Node not recognized for port %s", apiPort),
+			"chainID": chainID,
+			"apiPort": apiPort,
+		})
+		return
+	}
+
+	// Connect to the node using its RPC port
+	client, err := rpchttp.New(fmt.Sprintf("tcp://localhost:%d", nodeInfo.RPCPort), "/websocket")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to connect to node: %v", err)})
+		return
+	}
+
+	// Get validators from CometBFT
+	result, err := client.Validators(context.Background(), nil, nil, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get validators: %v", err)})
+		return
+	}
+
+	validators := result.Validators
+
+	c.JSON(http.StatusOK, gin.H{"validators": validators})
 }
 
 // GetSocialStatus - Retrieves an agent's social reputation
@@ -272,17 +326,38 @@ func GetSocialStatus(c *gin.Context) {
 	agentID := c.Param("agentID")
 	chainID := c.GetString("chainID")
 
-	validator := validator.GetValidatorByID(chainID, agentID)
-	if validator == nil {
+	// Get consensus validator info from CometBF`T
+	rpcPort, err := registry.GetRPCPortForChain(chainID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Chain not found: %v", err)})
+		return
+	}
+
+	client, err := rpchttp.New(fmt.Sprintf("tcp://localhost:%d", rpcPort), "/websocket")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to connect: %v", err)})
+		return
+	}
+
+	// Verify validator exists in CometBFT
+	result, err := client.Validators(context.Background(), nil, nil, nil)
+	if err != nil || !validatorExists(result.Validators, agentID) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Validator not found in consensus set"})
+		return
+	}
+
+	// Get social info from our registry
+	socialVal := validator.GetSocialValidator(chainID, agentID)
+	if socialVal == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Validator not found"})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"agentID":       validator.ID,
-		"name":          validator.Name,
-		"mood":          validator.Mood,
-		"relationships": validator.Relationships,
+		"agentID":       socialVal.ID,
+		"name":          socialVal.Name,
+		"mood":          socialVal.Mood,
+		"relationships": socialVal.Relationships,
 	})
 }
 
@@ -336,191 +411,6 @@ func UpdateRelationship(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Relationship updated successfully"})
 }
 
-// ProposeBlock creates a new block and starts consensus
-func ProposeBlock(c *gin.Context) {
-	chainID := c.GetString("chainID")
-	waitForConsensus := c.DefaultQuery("wait", "false") == "true"
-
-	bc := core.GetChain(chainID)
-	if bc == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Chain not found"})
-		return
-	}
-
-	block, err := bc.CreateBlock()
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Immediately create the discussion thread for visualization.
-	// The thread ID is derived from the block's hash.
-	threadID := block.Hash()
-	producerName := "ProducerAgent" // Replace with the actual producer agent's name as needed.
-	title := fmt.Sprintf("Block Proposal %s", threadID)
-	communication.CreateThread(threadID, title, producerName)
-
-	// Set up a subscription to capture discussions for this block
-	mp := mempool.GetMempool(chainID)
-
-	if mp != nil {
-		// Subscribe to agent discussions via broker
-		// if broker != nil {
-		_, err := core.NatsBrokerInstance.Subscribe("AGENT_DISCUSSION", func(m *nats.Msg) {
-			var discussion consensus.Discussion
-			if err := json.Unmarshal(m.Data, &discussion); err != nil {
-				log.Printf("Error unmarshalling discussion from NATS: %v", err)
-				return
-			}
-
-			// Store vote information in mempool for later storage in EigenDA
-			mp.EphemeralVotes = append(mp.EphemeralVotes, mempool.EphemeralVote{
-				ID:           discussion.ID,
-				AgentID:      discussion.ValidatorID,
-				VoteDecision: discussion.Type,
-				Timestamp:    discussion.Timestamp.Unix(),
-			})
-
-			// Store agent identity if not already stored
-			agentIdentitiesMutex.Lock()
-			if _, exists := mp.EphemeralAgentIdentities[discussion.ValidatorID]; !exists {
-				// Get validator name if available
-				v := validator.GetValidatorByID(chainID, discussion.ValidatorID)
-				if v != nil {
-					mp.EphemeralAgentIdentities[discussion.ValidatorID] = v.Name
-				} else {
-					mp.EphemeralAgentIdentities[discussion.ValidatorID] = discussion.ValidatorID
-				}
-			}
-			agentIdentitiesMutex.Unlock()
-		})
-		if err != nil {
-			log.Printf("Error subscribing to AGENT_DISCUSSION: %v", err)
-		}
-
-		// Also subscribe to final votes
-		_, err = core.NatsBrokerInstance.Subscribe("AGENT_VOTE", func(m *nats.Msg) {
-			var vote consensus.Discussion
-			if err := json.Unmarshal(m.Data, &vote); err != nil {
-				log.Printf("Error unmarshalling vote from NATS: %v", err)
-				return
-			}
-
-			// Store vote information in mempool for later storage in EigenDA
-			mp.EphemeralVotes = append(mp.EphemeralVotes, mempool.EphemeralVote{
-				AgentID:      vote.ValidatorID,
-				VoteDecision: vote.Type,
-				Timestamp:    vote.Timestamp.Unix(),
-			})
-
-			// Store agent identity if not already stored
-			agentIdentitiesMutex.Lock()
-			if _, exists := mp.EphemeralAgentIdentities[vote.ValidatorID]; !exists {
-				// Get validator name if available
-				v := validator.GetValidatorByID(chainID, vote.ValidatorID)
-				if v != nil {
-					mp.EphemeralAgentIdentities[vote.ValidatorID] = v.Name
-				} else {
-					mp.EphemeralAgentIdentities[vote.ValidatorID] = vote.ValidatorID
-				}
-			}
-			agentIdentitiesMutex.Unlock()
-		})
-		if err != nil {
-			log.Printf("Error subscribing to AGENT_VOTE: %v", err)
-		}
-		// }
-	}
-
-	cm := consensus.GetConsensusManager(chainID)
-	if err := cm.ProposeBlock(block); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to start consensus: " + err.Error()})
-		return
-	}
-
-	if !waitForConsensus {
-		c.JSON(http.StatusOK, gin.H{
-			"message":   "Block proposed successfully, consensus started",
-			"block":     block,
-			"thread_id": threadID,
-		})
-		return
-	}
-
-	result := make(chan consensus.ConsensusResult)
-	cm.SubscribeResult(int64(block.Height), result)
-
-	// Calculate total expected time: all rounds + voting round + buffer + safety margin
-	totalTime := time.Duration(consensus.DiscussionRounds+1)*consensus.RoundDuration +
-		5*time.Second + // Buffer time
-		2*time.Second // Safety margin
-
-	select {
-
-	case consensusResult := <-result:
-
-		// Store offchain data to EigenDA and clear temporary mempool data
-		if mp := mempool.GetMempool(chainID); mp != nil {
-			// Get discussions from consensus if available
-			var discussions []consensus.Discussion
-			activeConsensus := cm.GetActiveConsensus()
-			if activeConsensus != nil {
-				discussions = activeConsensus.GetDiscussions()
-			}
-
-			// No need to convert discussions since we're using the standardized struct directly
-
-			votes := make([]da.Vote, len(mp.EphemeralVotes))
-			for i, ev := range mp.EphemeralVotes {
-				votes[i] = da.Vote{
-					AgentID:      ev.AgentID,
-					VoteDecision: ev.VoteDecision,
-					Timestamp:    ev.Timestamp,
-				}
-			}
-
-			offchain := da.OffchainData{
-				ChainID:     chainID,
-				BlockHash:   threadID,
-				BlockHeight: block.Height,
-				Discussions: discussions, // Using the discussions directly
-				Votes:       votes,
-				Outcome: func() string {
-					if consensusResult.State == consensus.Accepted {
-						return "accepted"
-					}
-					return "rejected"
-				}(),
-				AgentIdentities: mp.EphemeralAgentIdentities,
-				Timestamp:       time.Now().Unix(),
-			}
-			if id, err := da.SaveOffchainData(offchain); err != nil {
-				log.Printf("Error saving offchain data: %v", err)
-			} else {
-				log.Printf("Offchain data saved with id: %s", id)
-			}
-			mp.ClearTemporaryData()
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"message":   "Consensus completed",
-			"block":     block,
-			"accepted":  consensusResult.State == consensus.Accepted,
-			"support":   consensusResult.Support,
-			"oppose":    consensusResult.Oppose,
-			"thread_id": threadID,
-		})
-	case <-time.After(totalTime):
-		// Close the broker to clean up subscriptions
-
-		c.JSON(http.StatusGatewayTimeout, gin.H{
-			"error":     "Consensus timed out",
-			"block":     block,
-			"thread_id": threadID,
-		})
-	}
-}
-
 // GetAllThreads returns all active discussion threads for monitoring.
 func GetAllThreads(c *gin.Context) {
 	threads := communication.GetAllThreads() // We'll implement this function in forum
@@ -553,52 +443,6 @@ func loadSampleAgents(genesisPrompt string) ([]core.Agent, error) {
 	return agents, nil
 }
 
-func registerAgent(chainID string, agent core.Agent, bootstrapPort int) error {
-	// Create a new node for this agent
-	newPort := findAvailablePort()
-	agentNode := node.NewNode(node.NodeConfig{
-		ChainConfig: p2p.ChainConfig{
-			ChainID: chainID,
-			P2PPort: newPort,
-			APIPort: findAvailableAPIPort(),
-		},
-		BootstrapNode: fmt.Sprintf("localhost:%d", bootstrapPort),
-	})
-
-	if err := agentNode.Start(); err != nil {
-		return fmt.Errorf("failed to start agent node: %v", err)
-	}
-
-	// Register the new node with the chain
-	chain := core.GetChain(chainID)
-	addr := fmt.Sprintf("localhost:%d", newPort)
-	chain.RegisterNode(addr, agentNode.GetP2PNode())
-
-	if agent.Role == "validator" {
-		validatorInstance := validator.NewValidator(
-			agent.ID,
-			agent.Name,
-			agent.Traits,
-			agent.Style,
-			agent.Influences,
-			agentNode.GetP2PNode(),
-		)
-
-		// Register validator
-		registry.RegisterValidator(chainID, agent.ID, validatorInstance)
-
-		// Broadcast WebSocket event
-		communication.BroadcastEvent(communication.EventAgentRegistered, map[string]interface{}{
-			"agent":     agent,
-			"chainId":   chainID,
-			"nodePort":  newPort,
-			"timestamp": time.Now(),
-		})
-	}
-
-	return nil
-}
-
 // CreateChain creates a new blockchain instance
 func CreateChain(c *gin.Context) {
 	var req CreateChainRequest
@@ -607,84 +451,196 @@ func CreateChain(c *gin.Context) {
 		return
 	}
 
-	// Check if chain already exists
-	if core.GetChain(req.ChainID) != nil {
+	// Check if chain already exists in our registry
+	if _, err := registry.GetRPCPortForChain(req.ChainID); err == nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "Chain already exists"})
 		return
 	}
 
-	// Find available ports for the bootstrap node
-	p2pPort := findAvailablePort()
-	apiPort := findAvailableAPIPort()
+	// Create CometBFT config for genesis node
+	config := cfg.DefaultConfig()
+	config.BaseConfig.RootDir = "./data/" + req.ChainID
+	config.Moniker = "genesis-node"
+	config.P2P.ListenAddress = "tcp://0.0.0.0:0"
+	config.RPC.ListenAddress = "tcp://0.0.0.0:0"
 
-	// Create bootstrap node for the new chain
-	bootstrapNode := node.NewNode(node.NodeConfig{
-		ChainConfig: p2p.ChainConfig{
-			ChainID: req.ChainID,
-			P2PPort: p2pPort,
-			APIPort: apiPort,
-		},
-		// No bootstrap node address as this will be the bootstrap node
-	})
+	// Get genesis node ID from its node_key.json
+	genesisNodeKeyFile := fmt.Sprintf("./data/%s/genesis/config/node_key.json", req.ChainID)
+	genesisNodeKey, err := p2p.LoadNodeKey(genesisNodeKeyFile)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load genesis node key"})
+		return
+	}
 
-	if err := bootstrapNode.Start(); err != nil {
+	// Make addresses routable
+	config.P2P.AllowDuplicateIP = true
+	config.P2P.AddrBookStrict = false
+	// We'll get the actual port after the node starts
+
+	// Use genesis node as seed for peer discovery
+	peerString := fmt.Sprintf("%s@127.0.0.1:26656", genesisNodeKey.ID())
+	config.P2P.Seeds = peerString
+
+	// Additional P2P settings
+	config.P2P.PexReactor = true        // Enable peer exchange
+	config.P2P.MaxNumInboundPeers = 100 // Increase limits
+	config.P2P.MaxNumOutboundPeers = 30
+	config.P2P.AddrBookStrict = false  // Allow same IP different ports
+	config.P2P.AllowDuplicateIP = true // Important for local testing
+
+	// Additional settings for better peer connections
+	config.P2P.HandshakeTimeout = 20 * time.Second
+	config.P2P.DialTimeout = 3 * time.Second
+	config.P2P.FlushThrottleTimeout = 10 * time.Millisecond
+
+	// Create required directories
+	if err := os.MkdirAll(config.BaseConfig.RootDir+"/config", 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to create config directory: %v", err)})
+		return
+	}
+
+	// Initialize config files and validator keys
+	if err := os.MkdirAll(config.BaseConfig.RootDir+"/config", 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to create config directory: %v", err)})
+		return
+	}
+
+	// Initialize validator key files
+	privValKeyFile := config.PrivValidatorKeyFile()
+	privValStateFile := config.PrivValidatorStateFile()
+	if !utils.FileExists(privValKeyFile) {
+		privVal := privval.GenFilePV(privValKeyFile, privValStateFile)
+		privVal.Save()
+	}
+
+	// Initialize node key file
+	nodeKeyFile := config.NodeKeyFile()
+	if !utils.FileExists(nodeKeyFile) {
+		if _, err := p2p.LoadOrGenNodeKey(nodeKeyFile); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to generate node key: %v", err)})
+			return
+		}
+	}
+
+	// Initialize genesis.json if it doesn't exist
+	genesisFile := config.GenesisFile()
+	if !utils.FileExists(genesisFile) {
+		// Get the validator's public key
+		privVal := privval.LoadFilePV(privValKeyFile, privValStateFile)
+		pubKey, err := privVal.GetPubKey()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get validator public key: %v", err)})
+			return
+		}
+
+		// Create genesis validator directly
+		genValidator := types.GenesisValidator{
+			PubKey: pubKey,
+			Power:  1000000, // Increase validator power significantly
+			Name:   "genesis",
+		}
+
+		genDoc := types.GenesisDoc{
+			ChainID:         req.ChainID,
+			GenesisTime:     time.Now(),
+			ConsensusParams: types.DefaultConsensusParams(),
+			Validators:      []types.GenesisValidator{genValidator},
+		}
+
+		// Validate genesis doc before saving
+		if err := genDoc.ValidateAndComplete(); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to validate genesis doc: %v", err)})
+			return
+		}
+
+		if err := genDoc.SaveAs(genesisFile); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to create genesis file: %v", err)})
+			return
+		}
+	}
+
+	// Create and start the genesis node
+	genesisNode, err := node.NewNode(config, req.ChainID, "") //TODO: Add the validator address
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to create genesis node: %v", err)})
+		return
+	}
+
+	if err := genesisNode.Start(context.Background()); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start bootstrap node"})
 		return
 	}
 
-	// Initialize new chain with its own mempool
-	mp := mempool.NewMempool(req.ChainID)
-	core.InitBlockchain(req.ChainID, mp)
-
-	// Register the bootstrap node with the chain
-	chain := core.GetChain(req.ChainID)
-	addr := fmt.Sprintf("localhost:%d", p2pPort)
-	chain.RegisterNode(addr, bootstrapNode.GetP2PNode())
+	// Register chain in our registry
+	registry.RegisterNode(req.ChainID, "genesis", registry.NodeInfo{
+		IsGenesis: true,
+		Name:      "genesis",
+		RPCPort:   func() int { p, _ := strconv.Atoi(config.RPC.ListenAddress[10:]); return p }(),
+		P2PPort:   func() int { p, _ := strconv.Atoi(config.P2P.ListenAddress[10:]); return p }(),
+	})
 
 	communication.BroadcastEvent(communication.EventChainCreated, map[string]interface{}{
 		"chainId":   req.ChainID,
 		"timestamp": time.Now(),
 	})
 
-	// Register sample agents based on the genesis prompt
-	agents, err := loadSampleAgents(req.GenesisPrompt)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load sample agents"})
-		return
-	}
+	// TODO: Register sample agents based on the genesis prompt
+	// agents, err := loadSampleAgents(req.GenesisPrompt)
+	// if err != nil {
+	// 	c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load sample agents"})
+	// 	return
+	// }
 
-	log.Printf("Loaded %d sample agents", len(agents))
+	// log.Printf("Loaded %d sample agents", len(agents))
 
-	// Register agents synchronously
-	for _, agent := range agents {
-		// Add a small delay between registrations for better UX
-		time.Sleep(500 * time.Millisecond)
+	// // Register agents synchronously
+	// for _, agent := range agents {
+	// 	// Add a small delay between registrations for better UX
+	// 	time.Sleep(500 * time.Millisecond)
 
-		if err := registerAgent(req.ChainID, agent, p2pPort); err != nil {
-			log.Printf("Failed to register agent %s: %v", agent.ID, err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to register agent %s", agent.ID)})
-			return
-		}
-		log.Printf("Successfully registered agent: %s (%s)", agent.Name, agent.ID)
-	}
+	// 	if err := registerAgent(req.ChainID, agent, p2pPort); err != nil {
+	// 		log.Printf("Failed to register agent %s: %v", agent.ID, err)
+	// 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to register agent %s", agent.ID)})
+	// 		return
+	// 	}
+	// 	log.Printf("Successfully registered agent: %s (%s)", agent.Name, agent.ID)
+	// }
 
 	c.JSON(http.StatusCreated, gin.H{
 		"message":  "Chain created successfully",
 		"chain_id": req.ChainID,
-		"bootstrap_node": map[string]int{
-			"p2p_port": p2pPort,
-			"api_port": apiPort,
+		"genesis_node": map[string]int{
+			"p2p_port": func() int { p, _ := strconv.Atoi(config.P2P.ListenAddress[10:]); return p }(),
+			"rpc_port": func() int { p, _ := strconv.Atoi(config.RPC.ListenAddress[10:]); return p }(),
 		},
-		"registered_agents": len(agents),
+		// "registered_agents": len(agents),
 	})
 }
 
 // ListChains returns all available chains
 func ListChains(c *gin.Context) {
 	chains := core.GetAllChains()
+
+	// TODO: Setup actual chain list
+	chains = append(chains, core.ChainInfo{
+		ChainID: "mainnet",
+		Name:    "mainnet",
+		Agents:  0,
+		Blocks:  0,
+	})
+
 	c.JSON(http.StatusOK, gin.H{
 		"chains": chains,
 	})
+}
+
+func validatorExists(validators []*types.Validator, agentID string) bool {
+	for _, v := range validators {
+		if v.Address.String() == agentID {
+			return true
+		}
+	}
+	return false
 }
 
 // GetBlockDiscussions returns the discussions for a specific block by hash
@@ -790,4 +746,85 @@ func ListBlockDiscussions(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"blocks": blocks})
+}
+
+// Add validator directly to genesis file
+func AddValidatorToGenesis(chainID string, agent core.Agent) bool {
+
+	// Set up data directory paths
+	dataDir := fmt.Sprintf("./data/%s/%s", chainID, agent.ID)
+	genesisFile := fmt.Sprintf("./data/%s/genesis/config/genesis.json", chainID)
+
+	// Create required directories
+	if err := os.MkdirAll(dataDir+"/config", 0755); err != nil {
+		return false
+	}
+	if err := os.MkdirAll(dataDir+"/data", 0755); err != nil {
+		return false
+	}
+
+	// Generate validator key
+	privValKeyFile := fmt.Sprintf("%s/config/priv_validator_key.json", dataDir)
+	privValStateFile := fmt.Sprintf("%s/data/priv_validator_state.json", dataDir)
+	privVal := privval.GenFilePV(privValKeyFile, privValStateFile)
+	pubKey, _ := privVal.GetPubKey()
+
+	// Read genesis file
+	genesisBytes, err := os.ReadFile(genesisFile)
+	if err != nil {
+		return false
+	}
+
+	// Parse genesis file
+	var genDoc types.GenesisDoc
+	if err := json.Unmarshal(genesisBytes, &genDoc); err != nil {
+		return false
+	}
+
+	// Add validator to genesis
+	validator := types.GenesisValidator{
+		Address: pubKey.Address(),
+		PubKey:  pubKey,
+		Power:   10,
+		Name:    agent.ID,
+	}
+	genDoc.Validators = append(genDoc.Validators, validator)
+
+	// Write updated genesis file
+	updatedGenesisBytes, err := json.MarshalIndent(genDoc, "", "  ")
+	if err != nil {
+		return false
+	}
+
+	if err := os.WriteFile(genesisFile, updatedGenesisBytes, 0644); err != nil {
+		return false
+	}
+
+	// Copy updated genesis to new node
+	newGenesisFile := fmt.Sprintf("%s/config/genesis.json", dataDir)
+	if err := os.WriteFile(newGenesisFile, updatedGenesisBytes, 0644); err != nil {
+		return false
+	}
+
+	return true
+}
+
+// GetAllAgents returns all registered agents for a chain
+func GetAllAgents(c *gin.Context) {
+	chainID := c.GetString("chainID")
+
+	agents := registry.GetAllAgents(chainID)
+
+	c.JSON(http.StatusOK, gin.H{
+		"agents": agents,
+	})
+}
+
+func GetRegistry(c *gin.Context) {
+	chainID := c.GetString("chainID")
+	agents := registry.GetAllAgents(chainID)
+	c.JSON(http.StatusOK, gin.H{
+		"agents":     agents,
+		"validators": registry.GetAllValidatorAgentMappings(chainID),
+	})
 }

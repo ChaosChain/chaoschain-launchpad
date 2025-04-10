@@ -194,7 +194,7 @@ export default function GenesisPage() {
                     <div>
                       <h3 className="font-bold text-lg">{chain.name}</h3>
                       <p className="text-gray-400 text-sm">
-                        {chain.agents} agents · {chain.blocks} blocks
+                        {/* {chain.agents} agents · {chain.blocks} blocks */}
                       </p>
                     </div>
                     <button 

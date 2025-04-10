@@ -19,7 +19,7 @@ import (
 
 var client *openai.Client
 
-func init() {
+func InitAI() {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
 		log.Println("Warning: OPENAI_API_KEY not set, using mock responses")
@@ -72,7 +72,7 @@ type SearchConfig struct {
 // DefaultLLMConfig returns standard LLM configuration
 func DefaultLLMConfig() LLMConfig {
 	return LLMConfig{
-		Model:       "gpt-3.5-turbo",
+		Model:       "gpt-4",
 		MaxTokens:   2048,
 		Temperature: 0.7,
 		StopTokens:  []string{"},]"},
@@ -211,7 +211,8 @@ func GenerateLLMResponseWithResearch(prompt string, topic string, traits []strin
 
 // generateLLMResponseWithOptions is the internal implementation that handles both research and non-research cases
 func generateLLMResponseWithOptions(prompt string, allowResearch bool, topic string, traits []string, config LLMConfig) string {
-	client := openai.NewClient(os.Getenv("OPENAI_API_KEY"))
+	// client := openai.NewClient(os.Getenv("OPEN_AI_KEY"))
+	client := openai.NewClient("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")
 
 	// Only perform research if allowed and needed
 	if allowResearch && strings.Contains(prompt, "Block details:") {
@@ -252,15 +253,10 @@ func generateLLMResponseWithOptions(prompt string, allowResearch bool, topic str
 	)
 
 	if err != nil {
-		return ""
+		return err.Error()
 	}
 
 	response := resp.Choices[0].Message.Content
-
-	var jsonTest interface{}
-	if err := json.Unmarshal([]byte(response), &jsonTest); err != nil {
-		return ""
-	}
 
 	return response
 }

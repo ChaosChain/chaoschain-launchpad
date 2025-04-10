@@ -1,88 +1,101 @@
 package node
 
 import (
+	"context"
 	"fmt"
 	"log"
-	"time"
+	"os"
 
-	"github.com/NethermindEth/chaoschain-launchpad/core"
-	"github.com/NethermindEth/chaoschain-launchpad/mempool"
-	"github.com/NethermindEth/chaoschain-launchpad/p2p"
-	"github.com/NethermindEth/chaoschain-launchpad/producer"
-	"github.com/NethermindEth/chaoschain-launchpad/registry"
-	"github.com/NethermindEth/chaoschain-launchpad/validator"
+	"github.com/NethermindEth/chaoschain-launchpad/consensus/abci"
+	cfg "github.com/cometbft/cometbft/config"
+	"github.com/cometbft/cometbft/node"
+	"github.com/cometbft/cometbft/p2p"
+	"github.com/cometbft/cometbft/privval"
+	"github.com/cometbft/cometbft/proxy"
+
+	tmlog "github.com/cometbft/cometbft/libs/log"
+	"github.com/cometbft/cometbft/types"
 )
 
-type NodeConfig struct {
-	ChainConfig   p2p.ChainConfig
-	BootstrapNode string
-}
-
 type Node struct {
-	config   NodeConfig
-	p2pNode  *p2p.Node
-	mempool  core.MempoolInterface
-	shutdown chan struct{}
+	cometCfg *cfg.Config
+	node     *node.Node
+	chainId  string
 }
 
-func NewNode(config NodeConfig) *Node {
+func NewNode(config *cfg.Config, chainId string, selfValidatorAddr string) (*Node, error) {
+	// Initialize config files and keys
+	cfg.EnsureRoot(config.RootDir) // This function returns void, no need to check error
+
+	// Create ABCI application
+	app := abci.NewApplication(chainId, selfValidatorAddr)
+
+	genDoc, err := types.GenesisDocFromFile(config.GenesisFile())
+	log.Printf("Genesis doc: %+v", genDoc)
+	log.Printf("Genesis validators count: %d", len(genDoc.Validators))
+	for i, v := range genDoc.Validators {
+		log.Printf("Genesis validator %d: Address=%s, PubKey=%s, Power=%d, Name=%s",
+			i, v.Address, v.PubKey, v.Power, v.Name)
+	}
+	if err != nil {
+		log.Printf("Error reading genesis file: %v", err)
+	}
+
+	// Create node key
+	nodeKey, err := p2p.LoadOrGenNodeKey(config.NodeKeyFile())
+	if err != nil {
+		return nil, fmt.Errorf("failed to load node key: %v", err)
+	}
+
+	// Create validator
+	privValidator := privval.LoadOrGenFilePV(
+		config.PrivValidatorKeyFile(),
+		config.PrivValidatorStateFile(),
+	)
+
+	// Create genesis doc provider
+	genDocProvider := func() (*types.GenesisDoc, error) {
+		return types.GenesisDocFromFile(config.GenesisFile())
+	}
+
+	// Create node
+	node, err := node.NewNode(
+		config,
+		privValidator,
+		nodeKey,
+		proxy.NewLocalClientCreator(app),
+		genDocProvider,
+		node.DefaultDBProvider,
+		node.DefaultMetricsProvider(config.Instrumentation),
+		tmlog.NewTMLogger(tmlog.NewSyncWriter(os.Stdout)),
+	)
+	if err != nil {
+		log.Fatalf("failed to create node NODE: %v", err)
+		return nil, fmt.Errorf("failed to create node: %v", err)
+	}
+
 	return &Node{
-		config:   config,
-		p2pNode:  p2p.NewNode(config.ChainConfig),
-		shutdown: make(chan struct{}),
-	}
+		cometCfg: config,
+		node:     node,
+		chainId:  chainId,
+	}, nil
 }
 
-func (n *Node) Start() error {
-	// Initialize components
-	n.mempool = mempool.InitMempool(n.config.ChainConfig.ChainID, 3600)
-
-	// Start P2P server
-	log.Printf("Starting P2P node on port %d...", n.config.ChainConfig.P2PPort)
-	n.p2pNode.StartServer(n.config.ChainConfig.P2PPort)
-
-	// Register this node in the network
-	addr := fmt.Sprintf("localhost:%d", n.config.ChainConfig.P2PPort)
-	p2p.RegisterNode(addr, n.p2pNode)
-
-	// Set this as the default P2P node
-	p2p.SetDefaultNode(n.p2pNode)
-
-	// Give the server a moment to initialize
-	time.Sleep(time.Second)
-
-	// If bootstrap node is specified, connect to it
-	if n.config.BootstrapNode != "" {
-		n.p2pNode.ConnectToPeer(n.config.BootstrapNode)
+func (n *Node) Start(ctx context.Context) error {
+	if err := n.node.Start(); err != nil {
+		return fmt.Errorf("failed to start node: %v", err)
 	}
-
 	return nil
 }
 
-func (n *Node) Stop() {
-	close(n.shutdown)
+func (n *Node) Stop(ctx context.Context) error {
+	return n.node.Stop()
 }
 
-func (n *Node) GetP2PPort() int {
-	return n.config.ChainConfig.P2PPort
+func (n *Node) NodeInfo() p2p.NodeInfo {
+	return n.node.NodeInfo().(p2p.DefaultNodeInfo)
 }
 
-func (n *Node) GetAPIPort() int {
-	return n.config.ChainConfig.APIPort
-}
-
-func (n *Node) GetP2PNode() *p2p.Node {
-	return n.p2pNode
-}
-
-func (n *Node) GetMempool() core.MempoolInterface {
-	return n.mempool
-}
-
-func (n *Node) RegisterProducer(chainID string, id string, p *producer.Producer) {
-	registry.RegisterProducer(chainID, id, p)
-}
-
-func (n *Node) RegisterValidator(chainID string, id string, v *validator.Validator) {
-	registry.RegisterValidator(chainID, id, v)
+func (n *Node) Config() *cfg.Config {
+	return n.cometCfg
 }

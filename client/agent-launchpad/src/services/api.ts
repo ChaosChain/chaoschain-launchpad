@@ -158,8 +158,8 @@ export async function listChains(): Promise<Chain[]> {
     }
 }
 
-export async function fetchValidators(chainId: string): Promise<Validator[]> {
-    const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.FETCH_VALIDATORS}`, {
+export async function fetchAgents(chainId: string): Promise<Validator[]> {
+    const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.FETCH_AGENTS}`, {
         headers: {
             'X-Chain-Id': chainId,
         },
@@ -168,15 +168,26 @@ export async function fetchValidators(chainId: string): Promise<Validator[]> {
     if (!response.ok) {
         throw new ApiError(data.error || 'Failed to fetch validators');
     }
-    return data.validators.map(({ ID, Name, Traits, Style, Influences, Mood, CurrentPolicy }: Validator) => ({
-        ID,
-        Name,
-        Traits,
-        Style,
-        Influences,
-        Mood,
-        CurrentPolicy
+    
+    // The issue is likely that the API response structure doesn't match what we expect
+    // Let's add some debug logging to see the exact structure
+    console.log('Raw API response:', data);
+    
+    // Check if data.agents exists, if not, try to handle the response differently
+    const agents = data.agents || data;
+    
+    const result = agents.map((agent: any) => ({
+        ID: agent.id || agent.ID,
+        Name: agent.name || agent.Name,
+        Traits: agent.traits || agent.Traits || [],
+        Style: agent.style || agent.Style || '',
+        Influences: agent.influences || agent.Influences || [],
+        Mood: agent.mood || agent.Mood || '',
+        CurrentPolicy: agent.currentPolicy || agent.CurrentPolicy || null
     }));
+    
+    console.log('Processed result:', result);
+    return result;
 }
 
 export async function proposeBlock(chainId: string): Promise<void> {
@@ -192,6 +203,7 @@ export async function proposeBlock(chainId: string): Promise<void> {
 }
 
 export async function submitTransaction(transaction: Transaction, chainId: string): Promise<void> {
+    transaction.content = "{\"title\":\"A possible novel approach to the Riemann Hypothesis (RH)\",\"abstract\":\"This paper analyzes the RH from the definition of the Riemann zeta function, trying to obtain possible links between the hypothesis and other generalized zeta functions. A possible path is discussed using the \u03b6 function expression involving the fractional part of x, with insights into the convergence region and its implications.\",\"content\":\"In this study, we explore a novel pathway to approach the Riemann Hypothesis using a reformulation of the \u03b6(s) function involving floor and fractional part integrals. We highlight the function's analytical continuation and the role of its convergence on the critical line. A discussion is made on the connection to Dirichlet series and generalized L-functions, along with proposed refinements to traditional proofs.\",\"author\":\"Vincenzo Mantova\",\"topic_tags\":[\"Riemann Hypothesis\",\"Analytic Number Theory\",\"Zeta Function\"],\"timestamp\":1710129999}"
     const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.SUBMIT_TRANSACTION}`, {
         method: 'POST',
         headers: {
@@ -204,4 +216,8 @@ export async function submitTransaction(transaction: Transaction, chainId: strin
     if (!response.ok) {
         throw new ApiError('Failed to submit transaction');
     }
+
+    const data = await response.json();
+
+    return data;
 } 

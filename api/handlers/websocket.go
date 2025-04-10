@@ -16,19 +16,43 @@ var upgrader = websocket.Upgrader{
 }
 
 func HandleWebSocket(c *gin.Context) {
+	chainID := c.GetString("chainID")
+	log.Printf("New WebSocket connection for chain: %s", chainID)
+
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		log.Printf("Failed to upgrade connection: %v", err)
 		return
 	}
+	defer conn.Close()
 
-	// Register client
-	wsManager := communication.GetWSManager()
-	wsManager.Register() <- conn
+	// Create a broadcast function for this connection
+	broadcast := func(data communication.AgentVote) {
+		event := struct {
+			Type    string                  `json:"type"`
+			Payload communication.AgentVote `json:"payload"`
+		}{
+			Type:    "AGENT_VOTE",
+			Payload: data,
+		}
 
-	// Handle disconnection
-	go func() {
-		<-c.Done()
-		wsManager.Unregister() <- conn
-	}()
+		log.Printf("Sending WebSocket event: %+v", event)
+		err := conn.WriteJSON(event)
+		if err != nil {
+			log.Printf("Error writing to websocket: %v", err)
+		}
+	}
+
+	log.Printf("Starting file watcher for chain: %s", chainID)
+	// Start watching the discussion file
+	go communication.WatchDiscussionFile(chainID, broadcast)
+
+	// Keep connection alive and handle disconnection
+	for {
+		_, _, err := conn.ReadMessage()
+		if err != nil {
+			log.Printf("WebSocket connection closed: %v", err)
+			break
+		}
+	}
 }

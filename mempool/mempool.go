@@ -123,6 +123,7 @@ func (mp *Mempool) Size() int {
 func NewMempool(chainID string) *Mempool {
 	return &Mempool{
 		transactions:             make(map[string]core.Transaction),
+		expirationSec:            3600, // 1 hour default
 		chainID:                  chainID,
 		EphemeralBlockHashes:     []string{},
 		EphemeralVotes:           []EphemeralVote{},
