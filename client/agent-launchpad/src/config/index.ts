@@ -1,6 +1,6 @@
 export const API_CONFIG = {
-    BASE_URL: process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:3000',
-    AGENT_SERVICE_URL: process.env.NEXT_PUBLIC_AGENT_SERVICE_URL || 'http://localhost:5000',
+    BASE_URL: 'http://127.0.0.1:3000',
+    AGENT_SERVICE_URL: 'http://localhost:5000',
     ENDPOINTS: {
         REGISTER_AGENT: '/api/register',
         CREATE_CHAIN: '/api/chains',

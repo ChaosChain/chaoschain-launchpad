@@ -98,6 +98,8 @@ export default function ThreadDetailPage() {
     const accepted = support >= (round10Votes.length * 2/3);
     
     return {
+      blockHeight: 0,
+      state: accepted ? 1 : 0,
       support,
       oppose,
       accepted,

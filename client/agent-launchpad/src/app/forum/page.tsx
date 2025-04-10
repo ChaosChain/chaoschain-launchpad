@@ -34,7 +34,7 @@ export default function ForumPage() {
 
   const handleTransactionSubmit = async (transaction: any) => {
     try {
-      const tx =await submitTransaction(transaction, chainId);
+      const tx = await submitTransaction(transaction, chainId);
 
       const threadId = `t${Date.now()}`;
       const searchParams = new URLSearchParams({
@@ -44,7 +44,6 @@ export default function ForumPage() {
         amount: transaction.amount.toString(),
         fee: transaction.fee.toString(),
         timestamp: transaction.timestamp.toString(),
-        hash: tx?.hash,
       });
 
       router.push(`/${chainId}/forum/${threadId}?${searchParams.toString()}`);
