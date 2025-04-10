@@ -4,9 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math/rand"
 	"strings"
-	"time"
 
 	"github.com/NethermindEth/chaoschain-launchpad/core"
 	"github.com/NethermindEth/chaoschain-launchpad/utils"
@@ -34,7 +32,7 @@ func GetMultiRoundReview(agent core.Agent, paper ResearchPaper, chainID string) 
 	// Simulate evolving thoughts over rounds
 	round := 0
 
-	for round < 11 {
+	for round < 3 {
 
 		previousDiscussion := utils.GetDiscussionLog(chainID)
 
@@ -109,16 +107,6 @@ func GetPaperReview(agent core.Agent, paper ResearchPaper, previousDiscussion st
 	if err := json.Unmarshal([]byte(response), &review); err != nil {
 		log.Printf("Error parsing review response: %v", err)
 		return PaperReview{}
-	}
-
-	// TODO: Remove later
-	rand.Seed(time.Now().UnixNano()) // Always seed first!
-	num := rand.Intn(100)            // Random int between 0 and 99
-
-	if num < 50 {
-		review.Approval = true
-	} else {
-		review.Approval = false
 	}
 
 	return review

@@ -170,6 +170,13 @@ func (app *Application) DeliverTx(req types.RequestDeliverTx) types.ResponseDeli
 			Log:  fmt.Sprintf("Discussion accepted from %s", tx.From),
 		}
 
+	case "loan_request":
+		log.Printf("Loan request received from: %s", tx.From)
+		return types.ResponseDeliverTx{
+			Code: 0,
+			Log:  fmt.Sprintf("Loan request from %s accepted for review", tx.From),
+		}
+
 	default:
 		return types.ResponseDeliverTx{Code: 0}
 	}
@@ -277,6 +284,12 @@ func (app *Application) PrepareProposal(req types.RequestPrepareProposal) types.
 			} else {
 				log.Printf("Rejecting empty discussion tx from %s", transaction.From)
 			}
+		case "loan_request":
+			// Accept any loan request that has content
+			if transaction.Content != "" {
+				log.Printf("Including loan request from %s", transaction.From)
+				validTxs = append(validTxs, tx)
+			}
 		}
 	}
 
@@ -337,6 +350,18 @@ func (app *Application) ProcessProposal(req types.RequestProcessProposal) types.
 
 			if !discussion.Support {
 				log.Printf("Validator %s rejected discussion: %s", currentAgent.Name, transaction.Content)
+				shouldReject = true
+			}
+		case "loan_request":
+			// Get AI review of the loan request
+			review := ai.GetMultiRoundLoanReview(currentAgent, transaction.Content, app.chainID)
+
+			log.Printf("Review of the loan request: %+v, for the request %+v", review, transaction.Content)
+
+			utils.LogDiscussion(currentAgent.Name, fmt.Sprintf("%+v", review), app.chainID, false)
+
+			if !review.Approval {
+				log.Printf("Validator %s rejected loan request: %s", currentAgent.Name, review.RiskFactors)
 				shouldReject = true
 			}
 		}

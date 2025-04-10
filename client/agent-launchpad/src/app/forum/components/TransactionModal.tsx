@@ -73,6 +73,7 @@ export default function TransactionModal({ onClose, onSubmit, chainId }: Transac
                             required
                         >
                             <option value="submit_paper">Submit Paper</option>
+                            <option value="loan_request">Loan Request</option>
                             <option value="discuss_transaction">Discuss Transaction</option>
                         </select>
                     </div>

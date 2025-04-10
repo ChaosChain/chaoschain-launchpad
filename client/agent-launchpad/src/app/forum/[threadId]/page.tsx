@@ -8,6 +8,8 @@ import { useEffect, useState, useRef } from "react";
 import { wsService } from "@/services/websocket";
 import { fetchAgents } from "@/services/api";
 
+const ROUNDS_TO_VOTE = 2;
+
 interface AgentVote {
     validatorId: string;
     message: string;
@@ -87,7 +89,7 @@ export default function ThreadDetailPage() {
 
   // Calculate voting result from final round
   const calculateVotingResult = (replies: AgentVote[]) => {
-    const round10Votes = replies.filter(reply => reply.round === 10);
+    const round10Votes = replies.filter(reply => reply.round === ROUNDS_TO_VOTE);
     
     if (round10Votes.length === 0) return null;
     
@@ -226,7 +228,8 @@ export default function ThreadDetailPage() {
             />
             <div>
               <h1 className="text-3xl font-extrabold tracking-wide">
-                {(JSON.parse(transaction.content).title || transaction.content) || 'Loading...'}
+                {(JSON.parse(transaction.content)?.title || transaction.content) || 'Loading...'}
+                {/* {transaction.content || 'Loading...'} */}
               </h1>
               <h2 className="text-lg text-gray-400">
                 Hash: {transaction.hash}
@@ -293,7 +296,7 @@ export default function ThreadDetailPage() {
         </div>
 
         {/* Show Final Verdict only after round 10 */}
-        {currentRound >= 10 && votingResult && (
+        {currentRound >= ROUNDS_TO_VOTE && votingResult && (
           <div className="mt-8 bg-gray-800 p-6 rounded-lg">
             <h2 className="text-2xl font-bold mb-4">Final Verdict</h2>
             <div className="grid grid-cols-2 gap-4">
