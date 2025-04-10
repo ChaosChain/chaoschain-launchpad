@@ -197,7 +197,11 @@ func (n *Node) handleConnection(conn net.Conn) {
 		Address: myAddr,
 	}
 	handshakeData, _ := json.Marshal(response)
-	conn.Write(handshakeData)
+	if _, err := conn.Write(handshakeData); err != nil {
+		log.Printf("Failed to send handshake response: %v", err)
+		conn.Close()
+		return
+	}
 
 	go n.listenToPeer(peer)
 	log.Printf("Node %s accepted connection from: %s\n", myAddr, peerAddr)
