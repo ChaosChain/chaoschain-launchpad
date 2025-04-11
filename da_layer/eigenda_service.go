@@ -8,9 +8,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/NethermindEth/chaoschain-launchpad/communication"
 	"github.com/Layr-Labs/eigenda/api/clients"
 	"github.com/Layr-Labs/eigenda/core/auth"
+	"github.com/NethermindEth/chaoschain-launchpad/communication"
 	"github.com/nats-io/nats.go"
 )
 
