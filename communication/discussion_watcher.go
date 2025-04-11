@@ -138,6 +138,9 @@ func processLine(line string, broadcast func(AgentVote)) {
 
 func parseInt(s string) int {
 	val := 0
-	fmt.Sscanf(s, "%d", &val)
+	if _, err := fmt.Sscanf(s, "%d", &val); err != nil {
+		log.Printf("Failed to parse integer from string '%s': %v", s, err)
+		return 0
+	}
 	return val
 }

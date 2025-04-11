@@ -109,7 +109,9 @@ func (s *DataAvailabilityService) RetrieveData(dataID string) (map[string]interf
 
 	// Publish event that data was retrieved
 	retrieveMsg := fmt.Sprintf(`{"dataID":"%s","timestamp":%d}`, dataID, time.Now().Unix())
-	s.messenger.PublishGlobal(SUBJECT_DATA_RETRIEVED, retrieveMsg)
+	if err := s.messenger.PublishGlobal(SUBJECT_DATA_RETRIEVED, retrieveMsg); err != nil {
+		return nil, fmt.Errorf("failed to publish data retrieved event: %w", err)
+	}
 
 	return result, nil
 }

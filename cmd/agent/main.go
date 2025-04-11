@@ -193,7 +193,11 @@ func main() {
 					})
 
 					// Start the node
-					go agentNode.Start(context.Background())
+					go func() {
+						if err := agentNode.Start(context.Background()); err != nil {
+							log.Printf("Failed to start agent node: %v", err)
+						}
+					}()
 
 					// Setup and start API server
 					router := gin.New()

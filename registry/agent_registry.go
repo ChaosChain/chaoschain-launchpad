@@ -27,7 +27,10 @@ func InitRegistry() {
 	defer agentMutex.Unlock()
 
 	// Create registry directory if it doesn't exist
-	os.MkdirAll(filepath.Dir(registryFile), 0755)
+	if err := os.MkdirAll(filepath.Dir(registryFile), 0755); err != nil {
+		log.Printf("Failed to create registry directory: %v", err)
+		return
+	}
 
 	// Load existing registry or create new one
 	registry = loadRegistry()

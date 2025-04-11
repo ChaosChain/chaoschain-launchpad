@@ -99,7 +99,7 @@ func RegisterAgent(c *gin.Context) {
 
 	// Wait briefly for ports to be bound
 	select {
-	case _ = <-errCh:
+	case <-errCh:
 		// Process exited with error
 		// c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Agent process failed: %v", err)})
 		// return
@@ -422,7 +422,7 @@ type CreateChainRequest struct {
 	GenesisPrompt string `json:"genesis_prompt" binding:"required"`
 }
 
-func loadSampleAgents(genesisPrompt string) ([]core.Agent, error) {
+func LoadSampleAgents(genesisPrompt string) ([]core.Agent, error) {
 	filename, err := ai.GenerateAgents(genesisPrompt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate agents: %v", err)
@@ -590,8 +590,6 @@ func CreateChain(c *gin.Context) {
 	// 	c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load sample agents"})
 	// 	return
 	// }
-
-	// log.Printf("Loaded %d sample agents", len(agents))
 
 	// // Register agents synchronously
 	// for _, agent := range agents {

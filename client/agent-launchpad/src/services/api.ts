@@ -77,7 +77,6 @@ export async function registerAgent(agent: RegisterAgentParams, chainId: string)
             },
             body: JSON.stringify({
                 ...agent,
-                api_key: process.env.NEXT_PUBLIC_OPENAI_API_KEY,
                 endpoint: `${API_CONFIG.AGENT_SERVICE_URL}/${agent.role}`
             }),
         });

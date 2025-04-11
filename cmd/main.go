@@ -97,7 +97,7 @@ func main() {
 		}
 	}
 
-	pubKey, err := privVal.GetPubKey()
+	pubKey, _ := privVal.GetPubKey()
 
 	// Initialize node key file
 	nodeKeyFile := config.NodeKeyFile()

@@ -3,8 +3,8 @@ package communication
 import (
 	"fmt"
 
-	"github.com/nats-io/nats.go"
 	"github.com/NethermindEth/chaoschain-launchpad/core"
+	"github.com/nats-io/nats.go"
 )
 
 // Messenger encapsulates a NATS broker connection.

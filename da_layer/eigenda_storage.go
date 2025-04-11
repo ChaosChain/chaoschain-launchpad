@@ -3,7 +3,6 @@ package da
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"sort"
@@ -403,7 +402,7 @@ func saveMasterIndexConfig() error {
 	}
 
 	// Write config to file
-	if err := ioutil.WriteFile(configFile, data, 0644); err != nil {
+	if err := os.WriteFile(configFile, data, 0644); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
@@ -420,7 +419,7 @@ func loadMasterIndexConfig() (*MasterIndexConfig, error) {
 	}
 
 	// Read config file
-	data, err := ioutil.ReadFile(configFile)
+	data, err := os.ReadFile(configFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
