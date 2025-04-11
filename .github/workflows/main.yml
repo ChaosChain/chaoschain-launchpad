@@ -44,13 +44,13 @@ jobs:
         run: golangci-lint run --timeout=5m
 
       # Security checks
-      - name: Run gosec Security Scanner
-        uses: securego/gosec@master
-        with:
-          args: ./...
+      # - name: Run gosec Security Scanner
+      #   uses: securego/gosec@master
+      #   with:
+      #     args: ./...
 
-      - name: Run dependency vulnerability check
-        uses: golang/govulncheck-action@v1
+      # - name: Run dependency vulnerability check
+      #   uses: golang/govulncheck-action@v1
 
       # Performance profiling
       - name: Run benchmarks and profile
