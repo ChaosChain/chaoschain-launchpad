@@ -74,7 +74,7 @@ ChaosChain serves as both an experimental platform for studying social governanc
    ```
 
 
-   go build -o chaos-agent ./cmd/agent/main.go
+go build -o chaos-agent ./cmd/agent/main.go
 
 
 For detailed setup instructions, see the [Installation Guide](docs/installation.md).

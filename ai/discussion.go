@@ -28,7 +28,29 @@ func GetValidatorDiscussion(agent core.Agent, tx core.Transaction) Discussion {
 		return Discussion{}
 	}
 
-	prompt := fmt.Sprintf(`You are %s, with these traits: %v.
+	// Build agent description from whatever metadata is available
+	var description strings.Builder
+	description.WriteString(fmt.Sprintf("You are %s, with these traits: ", agent.Name))
+
+	// Add traits from metadata in a comma-separated format
+	var traits []string
+	for key, value := range agent.Metadata {
+		switch v := value.(type) {
+		case []interface{}:
+			// For array values, add each item
+			for _, item := range v {
+				traits = append(traits, fmt.Sprintf("%v", item))
+			}
+		default:
+			// For simple values, add as is
+			if key != "api_key" && key != "endpoint" { // Skip technical fields
+				traits = append(traits, fmt.Sprintf("%v", value))
+			}
+		}
+	}
+	description.WriteString(strings.Join(traits, ", "))
+
+	prompt := fmt.Sprintf(`%s.
 
 		You're participating in a group discussion about this topic:
 		%s
@@ -48,15 +70,15 @@ func GetValidatorDiscussion(agent core.Agent, tx core.Transaction) Discussion {
 		2. A stance on the topic statement (SUPPORT, OPPOSE, or QUESTION).
 		3. A reason for your stance (reference other validators only if they've already participated).
 
-        Analyze the statement of the topic by considering:
-        1. The exact wording of the statement.
-        2. If there are previous discussions, consider those viewpoints and reference specific validators 
-           only if they have actually participated. Always use the format |@Name| when mentioning them.
-        3. Your personal reaction based on your personality and analysis.
-        4. If others have commented, you may build upon or challenge their arguments using their exact names.
-           For example: "|@Einstein| makes a valid point about..." or "I disagree with |@Newton|'s analysis because..."
-           Remember: Every validator mention must be enclosed in pipes with @ symbol.
-           If you're first to comment, focus on your direct analysis of the statement.
+		Analyze the statement of the topic by considering:
+		1. The exact wording of the statement.
+		2. If there are previous discussions, consider those viewpoints and reference specific validators 
+		   only if they have actually participated. Always use the format |@Name| when mentioning them.
+		3. Your personal reaction based on your personality and analysis.
+		4. If others have commented, you may build upon or challenge their arguments using their exact names.
+		   For example: "|@Einstein| makes a valid point about..." or "I disagree with |@Newton|'s analysis because..."
+		   Remember: Every validator mention must be enclosed in pipes with @ symbol.
+		   If you're first to comment, focus on your direct analysis of the statement.
 
 		Important: Your analysis must be fully consistent. This means:
 		- If you agree with the statement and think the statement is true, your "stance" must be "SUPPORT".
@@ -64,11 +86,11 @@ func GetValidatorDiscussion(agent core.Agent, tx core.Transaction) Discussion {
 		- If you are unsure, then use "QUESTION".
 
 		Additionally:
-        - Ensure your "opinion", "stance", and "reason" all clearly align.
-        - Mentioning other validators is optional and should only be done if they have already participated.
-        - When referencing another validator, you MUST use the format |@Name| - the pipes are required.
-        - Never invent or mention validators that aren't shown in the previous discussions.
-        - Indicate whether you agree or disagree with specific points made by others.
+		- Ensure your "opinion", "stance", and "reason" all clearly align.
+		- Mentioning other validators is optional and should only be done if they have already participated.
+		- When referencing another validator, you MUST use the format |@Name| - the pipes are required.
+		- Never invent or mention validators that aren't shown in the previous discussions.
+		- Indicate whether you agree or disagree with specific points made by others.
 
 		Your response MUST be a JSON object with exactly these fields:
 		{
@@ -87,7 +109,8 @@ func GetValidatorDiscussion(agent core.Agent, tx core.Transaction) Discussion {
 		6. Leave id, validatorId, validatorName, round, and timestamp empty - they will be filled in later
 
 		Do not include any additional text or formatting.`,
-		agent.Name, strings.Join(agent.Traits, ", "), tx.Content)
+		description.String(),
+		tx.Content)
 
 	response := GenerateLLMResponse(prompt)
 

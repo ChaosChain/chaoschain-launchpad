@@ -8,6 +8,8 @@ import (
 
 	"github.com/NethermindEth/chaoschain-launchpad/core"
 	"github.com/NethermindEth/chaoschain-launchpad/utils"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 type ResearchPaper struct {
@@ -56,8 +58,33 @@ func GetPaperReview(agent core.Agent, paper ResearchPaper, previousDiscussion st
 		return PaperReview{}
 	}
 
-	prompt := fmt.Sprintf(`You are %s, a scientific reviewer with the following traits: %v.
+	// Build agent description from whatever metadata is available
+	var description strings.Builder
+	description.WriteString(fmt.Sprintf("You are %s, a scientific reviewer with the following background:\n\n", agent.Name))
 
+	// Add any available metadata as context
+	for key, value := range agent.Metadata {
+		switch v := value.(type) {
+		case []interface{}:
+			// Handle array values (like traits, influences)
+			items := make([]string, len(v))
+			for i, item := range v {
+				items[i] = fmt.Sprintf("%v", item)
+			}
+			description.WriteString(fmt.Sprintf("%s:\n%s\n\n",
+				cases.Title(language.English).String(key),
+				strings.Join(items, "\n"),
+			))
+		default:
+			// Handle simple values (like style, mood, specialization)
+			description.WriteString(fmt.Sprintf("%s: %v\n",
+				cases.Title(language.English).String(key),
+				value,
+			))
+		}
+	}
+
+	prompt := fmt.Sprintf(`%s
 	You are participating in a multi-round review of the following research paper:
 
 	Title: %s
@@ -68,7 +95,7 @@ func GetPaperReview(agent core.Agent, paper ResearchPaper, previousDiscussion st
 	%s
 	--- End of Discussion Log ---
 
-	Please write your review in the style of an ongoing academic discussion. Share your thoughts naturally, as if you're in a real conversation with other experts. You may reference previous discussion points and tag other reviewers using the format |@Name|, for example: "I agree with |@Marie Curie| on the reproducibility concern..."
+	Please write your review in the style of an ongoing academic discussion. Share your thoughts naturally, as if you're in a real conversation with other experts. You may reference previous discussion points and tag other reviewers using the format |@Name|.
 
 	If there are previous discussion messages, consider them carefully before responding. Build upon, critique, or clarify others' points respectfully. Your goal is to collaboratively evaluate the research over multiple rounds.
 
@@ -78,30 +105,25 @@ func GetPaperReview(agent core.Agent, paper ResearchPaper, previousDiscussion st
 	3. Clarity and organization
 	4. Significance of contribution
 
-	You may also bring your personality traits into your tone and reasoning — let them influence how you communicate and what you prioritize.
-
-	Your 'approval' should be true if you think the paper is good, and false if you think it is bad.
-
-	Respond ONLY with a JSON object in this format:
+	You must respond with a valid JSON object in this exact format, with no additional text or formatting:
 	{
-	"summary": "Brief overview of the paper and any evolution of opinion from prior rounds",
-	"flaws": "List of major issues you've identified or agree with from others (should be a list of strings)",
-	"suggestions": "List of constructive feedback, possibly referencing or extending others' ideas (should be a list of strings)",
-	"is_reproducible": true or false,
-	"approval": true or false
+		"summary": "Brief overview of the paper and any evolution of opinion from prior rounds",
+		"flaws": ["List of major issues you've identified"],
+		"suggestions": ["List of constructive feedback"],
+		"is_reproducible": true|false,
+		"approval": true|false
 	}
 
-	Make sure the approval is true atleast half of the time.
-
-	Do not include any additional text or formatting.`,
-		agent.Name, strings.Join(agent.Traits, ", "),
-		paper.Title, paper.Abstract, paper.Content, previousDiscussion)
+	Your response must be valid JSON. The approval field must be a boolean, not a string.
+	Make sure the approval is true at least half of the time.`,
+		description.String(),
+		paper.Title,
+		paper.Abstract,
+		paper.Content,
+		previousDiscussion)
 
 	response := GenerateLLMResponse(prompt)
-
-	log.Println("OPENAI PROMPT: ", prompt)
-
-	log.Printf("OPEN AI REVIEW of the paper: %+v, for the paper %+v", response, paper)
+	log.Printf("PAPER REVIEW for paper: %+v", response)
 
 	var review PaperReview
 	if err := json.Unmarshal([]byte(response), &review); err != nil {
