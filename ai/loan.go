@@ -8,6 +8,8 @@ import (
 
 	"github.com/NethermindEth/chaoschain-launchpad/core"
 	"github.com/NethermindEth/chaoschain-launchpad/utils"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 type LoanReview struct {
@@ -37,8 +39,33 @@ func GetLoanReview(agent core.Agent, loan string, previousDiscussion string) Loa
 		return LoanReview{}
 	}
 
-	prompt := fmt.Sprintf(`You are %s, a DeFi banker with the following traits: %v.
+	// Build agent description from whatever metadata is available
+	var description strings.Builder
+	description.WriteString(fmt.Sprintf("You are %s, a DeFi banker with the following background:\n\n", agent.Name))
 
+	// Add any available metadata as context
+	for key, value := range agent.Metadata {
+		switch v := value.(type) {
+		case []interface{}:
+			// Handle array values (like traits, influences)
+			items := make([]string, len(v))
+			for i, item := range v {
+				items[i] = fmt.Sprintf("%v", item)
+			}
+			description.WriteString(fmt.Sprintf("%s:\n%s\n\n",
+				cases.Title(language.English).String(key),
+				strings.Join(items, "\n"),
+			))
+		default:
+			// Handle simple values (like style, mood, specialization)
+			description.WriteString(fmt.Sprintf("%s: %v\n",
+				cases.Title(language.English).String(key),
+				value,
+			))
+		}
+	}
+
+	prompt := fmt.Sprintf(`%s
 	You are participating in a multi-round review of this loan request:
 
 	Request Details: %s
@@ -65,8 +92,9 @@ func GetLoanReview(agent core.Agent, loan string, previousDiscussion string) Loa
 
 	Your response must be valid JSON. The approval field must be a boolean, not a string.
 	Make sure the approval is true at least half of the time.`,
-		agent.Name, strings.Join(agent.Traits, ", "),
-		loan, previousDiscussion)
+		description.String(),
+		loan,
+		previousDiscussion)
 
 	response := GenerateLLMResponse(prompt)
 	log.Printf("LOAN REVIEW for request: %+v", response)
