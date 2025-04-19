@@ -290,17 +290,14 @@ graph.add_edge("GenerateProposal", "Store")
 runnable = graph.compile()
 
 
-# ---------- Step 9: Run Agent ----------
 def serialize_output(raw_output):
     state = AgentState(**raw_output)
     return json.dumps(
-        state.model_dump(exclude={"vectorstore", "documents"}),  # don't dump big or unserializable stuff
+        state.model_dump(exclude={"vectorstore", "documents"}),
         indent=2
     )
 
 if __name__ == "__main__":
-    # ingest_core_eips("core_eips.jsonl", limit=500) Not needed if model already fine-tuned
-
     final_state = AgentState(**runnable.invoke(AgentState(documents=load_eip_documents("core_eips.jsonl"))))
 
     print("\n===== Proposal Draft =====\n")
