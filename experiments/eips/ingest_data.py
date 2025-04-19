@@ -7,6 +7,8 @@ from typing import List, Dict, Any, Optional
 from tqdm import tqdm
 from github import Github
 from datetime import datetime
+import math
+from github import Github, RateLimitExceededException
 
 def extract_eip_sections(soup) -> Dict[str, str]:
     """
@@ -336,23 +338,65 @@ def prepare_training_data(
     
     return prepare_unified_training_format(data_dir=data_dir, output_path=output_path)
 
-def ingest_github_discussions(output_dir: str = "data", token: Optional[str] = None) -> str:
+def process_in_batches(items, batch_size=100, token=None):
     """
-    Ingest GitHub Issues, PRs and Discussions from ethereum/EIPs repository.
+    Process items in batches with adaptive rate limiting.
     
     Args:
-        output_dir: Directory to save the discussions data
-        token: GitHub API token for authentication
-        
-    Returns:
-        Path to the saved discussions data file
+        items: Iterator of GitHub items
+        batch_size: Size of each batch (larger when using token)
+        token: GitHub token if authenticated
     """
-    g = Github(token) if token else Github()
-    repo = g.get_repo("ethereum/EIPs")
-    discussions_data = []
+    batch = []
     
-    def get_reaction_counts(item):
-        reactions = item.get_reactions()
+    # With token: Only tiny delay between batches
+    # Without token: 60 requests/hour = 1 request/minute
+    delay = 0.01 if token else 60  
+    
+    for item in items:
+        batch.append(item)
+        if len(batch) >= batch_size:
+            yield batch
+            batch = []
+            if delay > 0:
+                time.sleep(delay)
+    if batch:
+        yield batch
+
+def wait_for_reset(rate_limit):
+    """Wait until rate limit resets with progress bar."""
+    reset_time = rate_limit.reset.replace(tzinfo=None)
+    now = datetime.utcnow()
+    wait_seconds = (reset_time - now).total_seconds()
+    if wait_seconds > 0:
+        print(f"\nRate limit exceeded. Waiting {math.ceil(wait_seconds/60)} minutes for reset...")
+        for _ in tqdm(range(int(wait_seconds)), desc="Waiting for rate limit reset"):
+            time.sleep(1)
+
+def handle_rate_limit(func, github_instance=None, *args, **kwargs):
+    """Execute function with rate limit handling and exponential backoff."""
+    max_retries = 5
+    base_delay = 2
+    
+    for attempt in range(max_retries):
+        try:
+            return func(*args, **kwargs)
+        except RateLimitExceededException:
+            rate_limit = github_instance.get_rate_limit().core if github_instance else None
+            if attempt < max_retries - 1 and rate_limit:
+                wait_for_reset(rate_limit)
+                continue
+            raise Exception("Max retries exceeded waiting for rate limit")
+        except Exception as e:
+            delay = base_delay ** attempt
+            print(f"\nError: {e}. Retrying in {delay} seconds...")
+            time.sleep(delay)
+    raise Exception("Max retries exceeded")
+
+def get_reaction_counts(item):
+    """Get reaction counts with rate limit handling."""
+    try:
+        reactions = handle_rate_limit(item.get_reactions)
         counts = {
             "+1": 0, "-1": 0, "laugh": 0, "hooray": 0,
             "confused": 0, "heart": 0, "rocket": 0, "eyes": 0
@@ -360,87 +404,190 @@ def ingest_github_discussions(output_dir: str = "data", token: Optional[str] = N
         for reaction in reactions:
             counts[reaction.content] = counts.get(reaction.content, 0) + 1
         return counts
+    except Exception:
+        return {}
+
+def ingest_github_discussions(output_dir: str = "data", token: Optional[str] = None) -> str:
+    """
+    Ingest GitHub Issues, PRs and Discussions from ethereum/EIPs repository.
+    Handles rate limiting with exponential backoff and batch processing.
     
-    def process_comments(item, desc: str):
-        comments = []
-        for comment in tqdm(list(item.get_comments()), desc=desc, leave=False):
+    Args:
+        output_dir: Directory to save the discussions data
+        token: GitHub API token for authentication (highly recommended)
+        
+    Returns:
+        Path to the saved discussions data file
+    """
+    if not token:
+        print("\n⚠️  Warning: No GitHub token provided. Rate limits will be strict (60 requests/hour)")
+        print("To increase rate limits (5000 requests/hour), provide a token:")
+        print("1. Go to https://github.com/settings/tokens")
+        print("2. Generate a token with 'repo' scope")
+        print("3. Pass the token to this function\n")
+    
+    g = Github(token) if token else Github()
+    repo = g.get_repo("ethereum/EIPs")
+    
+    rate_limit = g.get_rate_limit().core
+    remaining = rate_limit.remaining
+    reset_time = rate_limit.reset.replace(tzinfo=None)
+    print(f"\nGitHub API Rate Limits:")
+    print(f"Remaining requests: {remaining}")
+    print(f"Reset time: {reset_time} UTC")
+    
+    if remaining < 100:
+        print("\n⚠️  Warning: Low on API requests. Consider waiting for reset or providing a token.")
+        if not token and input("Continue anyway? (y/n): ").lower() != 'y':
+            return None
+    
+    discussions_data = []
+    per_page = 100
+    
+    print("\nFetching and processing issues...")
+    page = 0
+    issues_processed = 0
+    actual_issues = 0
+    
+    with tqdm(desc="Processing Issues", unit="page") as pbar:
+        while True:
             try:
-                comments.append({
-                    "author": comment.user.login if comment.user else None,
-                    "body": comment.body,
-                    "created_at": comment.created_at.isoformat(),
-                    "reactions": get_reaction_counts(comment)
+                page_items = list(handle_rate_limit(
+                    lambda: repo.get_issues(state='all').get_page(page),
+                    github_instance=g
+                ))
+                if not page_items:
+                    break
+                
+                batch_processed = 0
+                for item in page_items:
+                    if not item.pull_request:
+                        try:
+                            comments = list(handle_rate_limit(item.get_comments, github_instance=g))
+                            discussions_data.append({
+                                "type": "issue",
+                                "number": item.number,
+                                "title": item.title,
+                                "body": item.body,
+                                "state": item.state,
+                                "created_at": item.created_at.isoformat(),
+                                "closed_at": item.closed_at.isoformat() if item.closed_at else None,
+                                "labels": [label.name for label in item.labels],
+                                "author": item.user.login if item.user else None,
+                                "comments": [{
+                                    "author": comment.user.login if comment.user else None,
+                                    "body": comment.body,
+                                    "created_at": comment.created_at.isoformat(),
+                                    "reactions": get_reaction_counts(comment)
+                                } for comment in comments],
+                                "metadata": {"reactions": get_reaction_counts(item)}
+                            })
+                            batch_processed += 1
+                            actual_issues += 1
+                        except Exception as e:
+                            print(f"\nError processing issue #{item.number}: {e}")
+                
+                page += 1
+                issues_processed += len(page_items)
+                pbar.update(1)
+                pbar.set_postfix({
+                    'Total Found': issues_processed,
+                    'Actual Issues': actual_issues,
+                    'Current Page': page,
+                    'Latest': f"#{page_items[-1].number}"
                 })
-            except Exception:
-                continue
-        return comments
-    
-    issues = repo.get_issues(state='all')
-    for issue in tqdm(issues, total=issues.totalCount, desc="Processing Issues"):
-        if not issue.pull_request:
-            try:
-                discussions_data.append({
-                    "type": "issue",
-                    "number": issue.number,
-                    "title": issue.title,
-                    "body": issue.body,
-                    "state": issue.state,
-                    "created_at": issue.created_at.isoformat(),
-                    "closed_at": issue.closed_at.isoformat() if issue.closed_at else None,
-                    "labels": [label.name for label in issue.labels],
-                    "author": issue.user.login if issue.user else None,
-                    "comments": process_comments(issue, f"Comments for #{issue.number}"),
-                    "metadata": {"reactions": get_reaction_counts(issue)}
-                })
-            except Exception:
-                continue
-            time.sleep(0.1)
-    
-    pulls = repo.get_pulls(state='all')
-    for pr in tqdm(pulls, total=pulls.totalCount, desc="Processing PRs"):
-        try:
-            pr_data = {
-                "type": "pull_request",
-                "number": pr.number,
-                "title": pr.title,
-                "body": pr.body,
-                "state": pr.state,
-                "merged": pr.merged,
-                "created_at": pr.created_at.isoformat(),
-                "closed_at": pr.closed_at.isoformat() if pr.closed_at else None,
-                "merged_at": pr.merged_at.isoformat() if pr.merged_at else None,
-                "labels": [label.name for label in pr.labels],
-                "author": pr.user.login if pr.user else None,
-                "comments": process_comments(pr, f"Comments for PR #{pr.number}"),
-                "review_comments": [],
-                "metadata": {
-                    "additions": pr.additions,
-                    "deletions": pr.deletions,
-                    "changed_files": pr.changed_files,
-                    "reactions": get_reaction_counts(pr)
-                }
-            }
-            
-            for comment in tqdm(list(pr.get_review_comments()), 
-                              desc=f"Review comments for PR #{pr.number}", 
-                              leave=False):
-                try:
-                    pr_data["review_comments"].append({
-                        "author": comment.user.login if comment.user else None,
-                        "body": comment.body,
-                        "created_at": comment.created_at.isoformat(),
-                        "path": comment.path,
-                        "position": comment.position,
-                        "reactions": get_reaction_counts(comment)
-                    })
-                except Exception:
+                
+                if token:
+                    time.sleep(0.1)
+                    
+            except Exception as e:
+                print(f"\nError fetching page {page}: {e}")
+                if "rate limit" in str(e).lower():
+                    rate_limit = g.get_rate_limit().core
+                    wait_for_reset(rate_limit)
                     continue
-            
-            discussions_data.append(pr_data)
-            
-        except Exception:
-            continue
-        time.sleep(0.1)
+                break
+    
+    print(f"\nProcessed {actual_issues} issues from {page} pages")
+    
+    print("\nFetching and processing PRs...")
+    page = 0
+    prs_processed = 0
+    
+    with tqdm(desc="Processing PRs", unit="page") as pbar:
+        while True:
+            try:
+                page_items = list(handle_rate_limit(
+                    lambda: repo.get_pulls(state='all').get_page(page),
+                    github_instance=g
+                ))
+                if not page_items:
+                    break
+                
+                batch_processed = 0
+                for pr in page_items:
+                    try:
+                        comments = list(handle_rate_limit(pr.get_comments, github_instance=g))
+                        review_comments = list(handle_rate_limit(pr.get_review_comments, github_instance=g))
+                        discussions_data.append({
+                            "type": "pull_request",
+                            "number": pr.number,
+                            "title": pr.title,
+                            "body": pr.body,
+                            "state": pr.state,
+                            "merged": pr.merged,
+                            "created_at": pr.created_at.isoformat(),
+                            "closed_at": pr.closed_at.isoformat() if pr.closed_at else None,
+                            "merged_at": pr.merged_at.isoformat() if pr.merged_at else None,
+                            "labels": [label.name for label in pr.labels],
+                            "author": pr.user.login if pr.user else None,
+                            "comments": [{
+                                "author": comment.user.login if comment.user else None,
+                                "body": comment.body,
+                                "created_at": comment.created_at.isoformat(),
+                                "reactions": get_reaction_counts(comment)
+                            } for comment in comments],
+                            "review_comments": [{
+                                "author": comment.user.login if comment.user else None,
+                                "body": comment.body,
+                                "created_at": comment.created_at.isoformat(),
+                                "path": comment.path,
+                                "position": comment.position,
+                                "reactions": get_reaction_counts(comment)
+                            } for comment in review_comments],
+                            "metadata": {
+                                "additions": pr.additions,
+                                "deletions": pr.deletions,
+                                "changed_files": pr.changed_files,
+                                "reactions": get_reaction_counts(pr)
+                            }
+                        })
+                        batch_processed += 1
+                        prs_processed += 1
+                    except Exception as e:
+                        print(f"\nError processing PR #{pr.number}: {e}")
+                
+                page += 1
+                pbar.update(1)
+                pbar.set_postfix({
+                    'Processed': prs_processed,
+                    'Current Page': page,
+                    'Latest': f"#{page_items[-1].number}"
+                })
+                
+                if token:
+                    time.sleep(0.1)
+                    
+            except Exception as e:
+                print(f"\nError fetching page {page}: {e}")
+                if "rate limit" in str(e).lower():
+                    rate_limit = g.get_rate_limit().core
+                    wait_for_reset(rate_limit)
+                    continue
+                break
+    
+    print(f"\nProcessed {prs_processed} PRs from {page} pages")
+    print(f"\nTotal items processed: {actual_issues + prs_processed}")
     
     discussions_path = os.path.join(output_dir, "github_discussions.jsonl")
     with open(discussions_path, "w") as f:
@@ -449,18 +596,27 @@ def ingest_github_discussions(output_dir: str = "data", token: Optional[str] = N
     
     return discussions_path
 
-def ingest_all_data(data_dir: str = "data") -> None:
+def ingest_all_data(
+    data_dir: str = "data",
+    github_token: Optional[str] = None,
+    skip_github: bool = False
+) -> None:
     """
     Orchestrate the complete data ingestion pipeline.
     
     Args:
         data_dir: Base directory for all data files
+        github_token: GitHub API token for faster ingestion
+        skip_github: Skip GitHub data ingestion if True
     """
     os.makedirs(data_dir, exist_ok=True)
     
     steps = {
         "Downloading ontology files": lambda: download_ontology_files(data_dir),
-        "Ingesting GitHub Discussions": lambda: ingest_github_discussions(data_dir),
+        "Ingesting GitHub Discussions": lambda: (
+            ingest_github_discussions(data_dir, token=github_token)
+            if not skip_github else print("Skipping GitHub ingestion...")
+        ),
         "Ingesting Ethereum Book": lambda: ingest_ethereum_book(data_dir),
         "Ingesting EIPs": lambda: [
             ingest_core_eips(category, os.path.join(data_dir, "eips.jsonl"))
@@ -491,4 +647,17 @@ def ingest_all_data(data_dir: str = "data") -> None:
     print("\n=== Data Ingestion Complete ===")
 
 if __name__ == "__main__":
-    ingest_all_data()
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Ingest Ethereum data for training")
+    parser.add_argument("--data-dir", default="data", help="Directory to store data")
+    parser.add_argument("--github-token", help="GitHub API token for faster ingestion")
+    parser.add_argument("--skip-github", action="store_true", help="Skip GitHub data ingestion")
+    
+    args = parser.parse_args()
+    
+    ingest_all_data(
+        data_dir=args.data_dir,
+        github_token=args.github_token,
+        skip_github=args.skip_github
+    )
