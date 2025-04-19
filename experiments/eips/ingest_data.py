@@ -442,14 +442,10 @@ def ingest_github_discussions(output_dir: str = "data", token: Optional[str] = N
             return None
     
     discussions_data = []
-    per_page = 100
-    
-    print("\nFetching and processing issues...")
+    print("\nFetching and processing issues and PRs...")
     page = 0
-    issues_processed = 0
-    actual_issues = 0
     
-    with tqdm(desc="Processing Issues", unit="page") as pbar:
+    with tqdm(desc="Processing Pages", unit="page") as pbar:
         while True:
             try:
                 page_items = list(handle_rate_limit(
@@ -459,11 +455,29 @@ def ingest_github_discussions(output_dir: str = "data", token: Optional[str] = N
                 if not page_items:
                     break
                 
-                batch_processed = 0
                 for item in page_items:
-                    if not item.pull_request:
-                        try:
-                            comments = list(handle_rate_limit(item.get_comments, github_instance=g))
+                    try:
+                        if item.pull_request:  # It's a PR
+                            pr = item.as_pull_request()  # Convert issue to PR object
+                            discussions_data.append({
+                                "type": "pull_request",
+                                "number": pr.number,
+                                "title": pr.title,
+                                "body": pr.body,
+                                "state": pr.state,
+                                "merged": pr.merged,
+                                "created_at": pr.created_at.isoformat(),
+                                "closed_at": pr.closed_at.isoformat() if pr.closed_at else None,
+                                "merged_at": pr.merged_at.isoformat() if pr.merged_at else None,
+                                "labels": [label.name for label in pr.labels],
+                                "author": pr.user.login if pr.user else None,
+                                "metadata": {
+                                    "additions": pr.additions,
+                                    "deletions": pr.deletions,
+                                    "changed_files": pr.changed_files,
+                                }
+                            })
+                        else:  # It's an issue
                             discussions_data.append({
                                 "type": "issue",
                                 "number": item.number,
@@ -474,103 +488,15 @@ def ingest_github_discussions(output_dir: str = "data", token: Optional[str] = N
                                 "closed_at": item.closed_at.isoformat() if item.closed_at else None,
                                 "labels": [label.name for label in item.labels],
                                 "author": item.user.login if item.user else None,
-                                "comments": [{
-                                    "author": comment.user.login if comment.user else None,
-                                    "body": comment.body,
-                                    "created_at": comment.created_at.isoformat(),
-                                    "reactions": get_reaction_counts(comment)
-                                } for comment in comments],
-                                "metadata": {"reactions": get_reaction_counts(item)}
                             })
-                            batch_processed += 1
-                            actual_issues += 1
-                        except Exception as e:
-                            print(f"\nError processing issue #{item.number}: {e}")
-                
-                page += 1
-                issues_processed += len(page_items)
-                pbar.update(1)
-                pbar.set_postfix({
-                    'Total Found': issues_processed,
-                    'Actual Issues': actual_issues,
-                    'Current Page': page,
-                    'Latest': f"#{page_items[-1].number}"
-                })
-                
-                if token:
-                    time.sleep(0.1)
-                    
-            except Exception as e:
-                print(f"\nError fetching page {page}: {e}")
-                if "rate limit" in str(e).lower():
-                    rate_limit = g.get_rate_limit().core
-                    wait_for_reset(rate_limit)
-                    continue
-                break
-    
-    print(f"\nProcessed {actual_issues} issues from {page} pages")
-    
-    print("\nFetching and processing PRs...")
-    page = 0
-    prs_processed = 0
-    
-    with tqdm(desc="Processing PRs", unit="page") as pbar:
-        while True:
-            try:
-                page_items = list(handle_rate_limit(
-                    lambda: repo.get_pulls(state='all').get_page(page),
-                    github_instance=g
-                ))
-                if not page_items:
-                    break
-                
-                batch_processed = 0
-                for pr in page_items:
-                    try:
-                        comments = list(handle_rate_limit(pr.get_comments, github_instance=g))
-                        review_comments = list(handle_rate_limit(pr.get_review_comments, github_instance=g))
-                        discussions_data.append({
-                            "type": "pull_request",
-                            "number": pr.number,
-                            "title": pr.title,
-                            "body": pr.body,
-                            "state": pr.state,
-                            "merged": pr.merged,
-                            "created_at": pr.created_at.isoformat(),
-                            "closed_at": pr.closed_at.isoformat() if pr.closed_at else None,
-                            "merged_at": pr.merged_at.isoformat() if pr.merged_at else None,
-                            "labels": [label.name for label in pr.labels],
-                            "author": pr.user.login if pr.user else None,
-                            "comments": [{
-                                "author": comment.user.login if comment.user else None,
-                                "body": comment.body,
-                                "created_at": comment.created_at.isoformat(),
-                                "reactions": get_reaction_counts(comment)
-                            } for comment in comments],
-                            "review_comments": [{
-                                "author": comment.user.login if comment.user else None,
-                                "body": comment.body,
-                                "created_at": comment.created_at.isoformat(),
-                                "path": comment.path,
-                                "position": comment.position,
-                                "reactions": get_reaction_counts(comment)
-                            } for comment in review_comments],
-                            "metadata": {
-                                "additions": pr.additions,
-                                "deletions": pr.deletions,
-                                "changed_files": pr.changed_files,
-                                "reactions": get_reaction_counts(pr)
-                            }
-                        })
-                        batch_processed += 1
-                        prs_processed += 1
                     except Exception as e:
-                        print(f"\nError processing PR #{pr.number}: {e}")
+                        print(f"\nError processing #{item.number}: {e}")
+                        continue
                 
                 page += 1
                 pbar.update(1)
                 pbar.set_postfix({
-                    'Processed': prs_processed,
+                    'Total Items': len(discussions_data),
                     'Current Page': page,
                     'Latest': f"#{page_items[-1].number}"
                 })
@@ -586,8 +512,7 @@ def ingest_github_discussions(output_dir: str = "data", token: Optional[str] = N
                     continue
                 break
     
-    print(f"\nProcessed {prs_processed} PRs from {page} pages")
-    print(f"\nTotal items processed: {actual_issues + prs_processed}")
+    print(f"\nProcessed {len(discussions_data)} total items from {page} pages")
     
     discussions_path = os.path.join(output_dir, "github_discussions.jsonl")
     with open(discussions_path, "w") as f:
