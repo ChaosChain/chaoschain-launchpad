@@ -52,7 +52,6 @@ def format_training_example(source: str, data: Dict[str, Any]) -> Dict[str, str]
     """Format data from different sources into a consistent training example format."""
     
     if source == "eip":
-        # Combine sections into content
         content = "\n\n".join(f"## {section}\n{text}" for section, text in data["sections"].items())
         
         return {
@@ -60,7 +59,7 @@ def format_training_example(source: str, data: Dict[str, Any]) -> Dict[str, str]
             "input": TrainingTemplates.eip_proposal["input_format"].format(
                 title=data["title"],
                 eip=data["eip"],
-                authors=", ".join(data["authors"]), # Join author list
+                authors=", ".join(data["authors"]),
                 context=data.get("context", "")
             ),
             "output": content,
