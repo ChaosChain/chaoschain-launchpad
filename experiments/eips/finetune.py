@@ -225,18 +225,34 @@ def setup_model(config: ModelConfig, hf_token: str):
         raise ValueError("Please set HUGGING_FACE_TOKEN environment variable")
     
     try:
-        # Load tokenizer first
-        tokenizer = AutoTokenizer.from_pretrained(
-            config.model_name,
-            trust_remote_code=True,
-            use_fast=False,
-            padding_side="right",
-            token=hf_token
-        )
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(
+                config.model_name,
+                trust_remote_code=True,
+                use_fast=False,
+                padding_side="right",
+                token=hf_token
+            )
+        except ImportError as e:
+            if "sentencepiece" in str(e):
+                print("Installing sentencepiece library...")
+                import subprocess
+                subprocess.check_call(["pip", "install", "sentencepiece"])
+                
+                # Retry tokenizer loading
+                tokenizer = AutoTokenizer.from_pretrained(
+                    config.model_name,
+                    trust_remote_code=True,
+                    use_fast=False,
+                    padding_side="right",
+                    token=hf_token
+                )
+            else:
+                raise e
+        
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
         
-        # Then load model with the tokenizer's vocab size
         model_args = {
             "torch_dtype": config.dtype,
             "low_cpu_mem_usage": True,
