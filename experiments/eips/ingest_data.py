@@ -315,7 +315,6 @@ def prepare_training_data(
     ontology_examples = []
     for term in tqdm(ontology_terms, desc="Processing ontology"):
         try:
-            # Basic example
             if term.get("term") and term.get("definition"):
                 ontology_examples.append({
                     "title": term["term"],
@@ -325,7 +324,6 @@ def prepare_training_data(
                     "section": "terminology"
                 })
             
-                # Additional EIP-based example
                 if term.get("eip"):
                     ontology_examples.append({
                         "title": f"Improving {term['term']}",
@@ -464,8 +462,8 @@ def ingest_github_discussions(output_dir: str = "data", token: Optional[str] = N
                 
                 for item in page_items:
                     try:
-                        if item.pull_request:  # It's a PR
-                            pr = item.as_pull_request()  # Convert issue to PR object
+                        if item.pull_request:
+                            pr = item.as_pull_request()
                             discussions_data.append({
                                 "type": "pull_request",
                                 "number": pr.number,
@@ -484,7 +482,7 @@ def ingest_github_discussions(output_dir: str = "data", token: Optional[str] = N
                                     "changed_files": pr.changed_files,
                                 }
                             })
-                        else:  # It's an issue
+                        else:
                             discussions_data.append({
                                 "type": "issue",
                                 "number": item.number,
