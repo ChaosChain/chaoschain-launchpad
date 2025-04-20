@@ -216,16 +216,20 @@ class DatasetPreparation:
         
         return train_test
 
-def setup_model(config: ModelConfig):
+def setup_model(config: ModelConfig, hf_token: str):
     """Set up the model with LoRA configuration."""
     
     print(f"\nLoading model {config.model_name}...")
+    
+    if not hf_token:
+        raise ValueError("Please set HUGGING_FACE_TOKEN environment variable")
     
     model_args = {
         "torch_dtype": config.dtype,
         "low_cpu_mem_usage": True,
         "trust_remote_code": True,
-        "use_cache": False 
+        "use_cache": False,
+        "token": hf_token  # Add token here
     }
     
     if config.device == "cuda":
@@ -238,7 +242,8 @@ def setup_model(config: ModelConfig):
             config.model_name,
             trust_remote_code=True,
             use_fast=False,
-            padding_side="right"
+            padding_side="right",
+            token=hf_token  # And here
         )
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -277,7 +282,8 @@ def train_model(
     data_path: str = "data/unified_training.jsonl",
     output_dir: str = None,
     model_path: str = None,
-    model_type: str = None
+    model_type: str = None,
+    hf_token: str = None
 ):
     """
     Train the model on the prepared dataset.
@@ -302,7 +308,7 @@ def train_model(
     print(f"Using device: {config.device}")
     print(f"Using dtype: {config.dtype}, fp16: {config.use_fp16}")
     
-    model, tokenizer = setup_model(config)
+    model, tokenizer = setup_model(config, hf_token)
     model.print_trainable_parameters()
     
     dataset_prep = DatasetPreparation(tokenizer)
@@ -366,5 +372,6 @@ if __name__ == "__main__":
         data_path=args.data_path,
         output_dir=args.output_dir,
         model_path=args.model_path,
-        model_type=args.model_type
+        model_type=args.model_type,
+        hf_token=args.hf_token
     )
