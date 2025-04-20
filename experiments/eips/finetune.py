@@ -1,5 +1,3 @@
-# Fine-Tune a Small Model on EIP Dataset using LoRA (Mac Friendly)
-
 import os
 from dotenv import load_dotenv
 import torch
@@ -13,136 +11,193 @@ from peft import get_peft_model, LoraConfig, TaskType
 from datasets import load_dataset
 import gc
 from typing import Dict, Any
+import json
+from datasets import Dataset
 
 class ModelConfig:
     """Configuration for model training setup."""
     
-    def __init__(self, model_name: str = "facebook/opt-125m"):
+    def __init__(self, model_name: str = "deepseek-ai/deepseek-coder-6.7b-base"):
         """
         Initialize model configuration based on available hardware.
         
         Args:
-            model_name: Name of the pre-trained model to use
+            model_name: Name of the pre-trained model to use (default: deepseek-coder-6.7b-base)
         """
         self.model_name = model_name
         self.device = self._detect_device()
-        self.dtype = torch.float16 if self.device == "cuda" else torch.float32
-        self.use_fp16 = self.device == "cuda"
+        self.dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
+        self.use_fp16 = False
+        self.max_length = 2048
         
     def _detect_device(self) -> str:
         """Detect the best available device for training."""
         if torch.cuda.is_available():
+            print("GPU detected - using CUDA for training")
             return "cuda"
         if torch.backends.mps.is_available():
+            print("Apple Silicon detected - using MPS for training")
             return "mps"
+        print("No GPU detected - falling back to CPU training (this will be slow)")
         return "cpu"
     
     def get_peft_config(self) -> LoraConfig:
-        """Get LoRA configuration for the model."""
+        """Get LoRA configuration optimized for DeepSeek models."""
         return LoraConfig(
             task_type=TaskType.CAUSAL_LM,
-            r=8,
-            lora_alpha=16,
-            lora_dropout=0.05,
+            r=16,
+            lora_alpha=32,
+            lora_dropout=0.1,
             bias="none",
-            target_modules=["q_proj", "v_proj"]
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+            modules_to_save=["embed_tokens", "lm_head"]
         )
     
     def get_training_args(self, output_dir: str) -> TrainingArguments:
         """Get training arguments optimized for the device."""
-        return TrainingArguments(
-            output_dir=output_dir,
-            per_device_train_batch_size=1,
-            gradient_accumulation_steps=4,
-            num_train_epochs=3,
-            logging_steps=10,
-            save_strategy="epoch",
-            learning_rate=2e-4,
-            fp16=self.use_fp16,
-            save_total_limit=1,
-            ddp_find_unused_parameters=False,
-            optim="adamw_torch",
-            gradient_checkpointing=False
-        )
+        
+        args = {
+            "output_dir": output_dir,
+            "num_train_epochs": 2,
+            "logging_steps": 5,
+            "save_strategy": "steps",
+            "save_steps": 100,
+            "save_total_limit": 2,
+            "ddp_find_unused_parameters": False,
+            "optim": "paged_adamw_32bit",
+            "lr_scheduler_type": "cosine",
+            "warmup_ratio": 0.03,
+            "max_grad_norm": 0.3,
+            "group_by_length": True,
+        }
+        
+        if self.device == "cuda":
+            args.update({
+                "per_device_train_batch_size": 2,
+                "gradient_accumulation_steps": 16,
+                "learning_rate": 5e-5,
+                "bf16": True,
+                "tf32": True,
+                "gradient_checkpointing": True,
+                "max_steps": 1000
+            })
+        elif self.device == "mps":
+            args.update({
+                "per_device_train_batch_size": 1,
+                "gradient_accumulation_steps": 32,
+                "learning_rate": 2e-5,
+                "fp16": False,
+                "gradient_checkpointing": True
+            })
+        else:
+            args.update({
+                "per_device_train_batch_size": 1,
+                "gradient_accumulation_steps": 64,
+                "learning_rate": 1e-5,
+                "fp16": False,
+                "gradient_checkpointing": False
+            })
+        
+        return TrainingArguments(**args)
 
 class DatasetPreparation:
-    """Handles dataset loading and preprocessing."""
+    """Prepare dataset for training."""
     
-    def __init__(self, tokenizer: AutoTokenizer, max_length: int = 512):
-        """
-        Initialize dataset preparation with tokenizer.
-        
-        Args:
-            tokenizer: Tokenizer for encoding examples
-            max_length: Maximum sequence length
-        """
+    def __init__(self, tokenizer):
         self.tokenizer = tokenizer
-        self.max_length = max_length
-    
-    def prepare_example(self, example: Dict[str, Any]) -> Dict[str, str]:
-        """Format a single training example."""
-        return {
-            "input": f"{example['instruction']}\n\n{example['input']}",
-            "output": example["output"]
-        }
-    
-    def tokenize(self, example: Dict[str, str]) -> Dict[str, Any]:
-        """Tokenize a prepared example."""
-        full_text = example["input"] + example["output"]
-        encoded = self.tokenizer(
-            full_text,
-            truncation=True,
-            padding="max_length",
-            max_length=self.max_length
-        )
-        encoded["labels"] = encoded["input_ids"].copy()
-        return encoded
-    
+        
     def load_and_prepare(self, data_path: str):
-        """Load and prepare the complete dataset."""
-        dataset = load_dataset("json", data_files=data_path)
-        processed = dataset.map(self.prepare_example)
-        return processed.map(
-            self.tokenize,
-            remove_columns=processed["train"].column_names
+        """Load and prepare dataset for training."""
+        dataset = []
+        with open(data_path, 'r') as f:
+            for line in f:
+                dataset.append(json.loads(line))
+                
+        dataset = Dataset.from_list(dataset)
+        
+        dataset = dataset.map(
+            lambda x: {
+                'text': (
+                    f"### Instruction:\n{x['instruction']}\n\n"
+                    f"### Input:\n{x['input']}\n\n"
+                    f"### Response:\n{x['output']}\n\n"
+                    f"### End\n"
+                )
+            }
         )
+        
+        dataset = dataset.map(
+            lambda x: self.tokenizer(
+                x['text'],
+                truncation=True,
+                max_length=2048,
+                padding='max_length',
+                return_tensors='pt'
+            ),
+            remove_columns=['text']
+        )
+        
+        return dataset.train_test_split(test_size=0.05, shuffle=True, seed=42)
 
 def setup_model(config: ModelConfig):
-    """
-    Set up the model with LoRA configuration.
+    """Set up the model with LoRA configuration."""
     
-    Args:
-        config: Model configuration instance
+    print(f"\nLoading model {config.model_name}...")
+    
+    model_args = {
+        "torch_dtype": config.dtype,
+        "low_cpu_mem_usage": True,
+        "trust_remote_code": True
+    }
+    
+    if config.device == "cuda":
+        model_args["device_map"] = "auto"
+    else:
+        model_args["device_map"] = None
+    
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(
+            config.model_name,
+            trust_remote_code=True,
+            use_fast=False
+        )
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+            
+        model = AutoModelForCausalLM.from_pretrained(
+            config.model_name,
+            **model_args
+        )
         
-    Returns:
-        Tuple of (model, tokenizer)
-    """
-    model = AutoModelForCausalLM.from_pretrained(
-        config.model_name,
-        torch_dtype=config.dtype,
-        device_map="auto",
-        low_cpu_mem_usage=True
-    )
+        if config.device != "cuda":
+            model = model.to(config.device)
+            
+    except Exception as e:
+        print(f"Error loading model: {e}")
+        print("Attempting to load with safetensors disabled...")
+        model_args["use_safetensors"] = False
+        model = AutoModelForCausalLM.from_pretrained(
+            config.model_name,
+            **model_args
+        )
     
     for param in model.parameters():
         param.requires_grad = False
     
-    tokenizer = AutoTokenizer.from_pretrained(config.model_name)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    
+    print("Applying LoRA adapters...")
     model = get_peft_model(model, config.get_peft_config())
     
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     if trainable_params == 0:
         raise ValueError("No trainable parameters found! LoRA configuration might be incorrect.")
     
+    print(f"Model loaded successfully on {config.device}")
     return model, tokenizer
 
 def train_model(
     data_path: str = "data/unified_training.jsonl",
-    output_dir: str = "opt-eip-finetune",
-    model_name: str = "facebook/opt-125m"
+    output_dir: str = "deepseek-eip-finetune",
+    model_name: str = "deepseek-ai/deepseek-coder-6.7b-base"
 ):
     """
     Train the model on the prepared dataset.

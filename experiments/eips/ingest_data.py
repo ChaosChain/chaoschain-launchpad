@@ -314,22 +314,29 @@ def prepare_training_data(
     
     ontology_examples = []
     for term in tqdm(ontology_terms, desc="Processing ontology"):
-        ontology_examples.append({
-            "title": term["term"],
-            "content": term["definition"],
-            "context": "",
-            "chapter": "glossary",
-            "section": "terminology"
-        })
-        
-        if term.get("eip"):
-            ontology_examples.append({
-                "title": f"Improving {term['term']}",
-                "content": f"""## Abstract\nThis proposal aims to enhance {term['term']}.\n\n## Motivation\n{term['definition']}\n\n## Specification\nThe proposed changes involve standardizing {term['term']}.""",
-                "context": f"Based on {term.get('eip', 'existing implementations')}",
-                "chapter": "proposals",
-                "section": "improvements"
-            })
+        try:
+            # Basic example
+            if term.get("term") and term.get("definition"):
+                ontology_examples.append({
+                    "title": term["term"],
+                    "content": term["definition"],
+                    "context": "",
+                    "chapter": "glossary",
+                    "section": "terminology"
+                })
+            
+                # Additional EIP-based example
+                if term.get("eip"):
+                    ontology_examples.append({
+                        "title": f"Improving {term['term']}",
+                        "content": f"""## Abstract\nThis proposal aims to enhance {term['term']}.\n\n## Motivation\n{term['definition']}\n\n## Specification\nThe proposed changes involve standardizing {term['term']}.""",
+                        "context": f"Based on {term.get('eip', 'existing implementations')}",
+                        "chapter": "proposals",
+                        "section": "improvements"
+                    })
+        except Exception as e:
+            print(f"\nError processing ontology term: {e}")
+            continue
     
     ontology_path = os.path.join(data_dir, "ontology_examples.jsonl")
     with open(ontology_path, "w") as f:
@@ -524,7 +531,8 @@ def ingest_github_discussions(output_dir: str = "data", token: Optional[str] = N
 def ingest_all_data(
     data_dir: str = "data",
     github_token: Optional[str] = None,
-    skip_github: bool = False
+    skip_github: bool = False,
+    force: bool = False
 ) -> None:
     """
     Orchestrate the complete data ingestion pipeline.
@@ -533,20 +541,39 @@ def ingest_all_data(
         data_dir: Base directory for all data files
         github_token: GitHub API token for faster ingestion
         skip_github: Skip GitHub data ingestion if True
+        force: Force re-download even if files exist
     """
     os.makedirs(data_dir, exist_ok=True)
     
+    def check_file(filename):
+        path = os.path.join(data_dir, filename)
+        exists = os.path.exists(path)
+        if exists and not force:
+            print(f"✓ Found existing {filename}")
+        return exists and not force
+    
     steps = {
-        "Downloading ontology files": lambda: download_ontology_files(data_dir),
-        "Ingesting GitHub Discussions": lambda: (
-            ingest_github_discussions(data_dir, token=github_token)
-            if not skip_github else print("Skipping GitHub ingestion...")
+        "Downloading ontology files": lambda: (
+            print("Skipping ontology files (already exist)")
+            if check_file("ethereum-glossary.txt") and check_file("eip-ontology.txt")
+            else download_ontology_files(data_dir)
         ),
-        "Ingesting Ethereum Book": lambda: ingest_ethereum_book(data_dir),
-        "Ingesting EIPs": lambda: [
-            ingest_core_eips(category, os.path.join(data_dir, "eips.jsonl"))
-            for category in ["core", "networking", "interface", "erc", "meta", "informational"]
-        ],
+        "Ingesting GitHub Discussions": lambda: (
+            print("Skipping GitHub discussions (already exist)")
+            if check_file("github_discussions.jsonl") or skip_github
+            else ingest_github_discussions(data_dir, token=github_token)
+        ),
+        "Ingesting Ethereum Book": lambda: (
+            print("Skipping Ethereum book (already exists)")
+            if check_file("ethereum_book.jsonl")
+            else ingest_ethereum_book(data_dir)
+        ),
+        "Ingesting EIPs": lambda: (
+            print("Skipping EIPs (already exist)")
+            if check_file("eips.jsonl")
+            else [ingest_core_eips(category, os.path.join(data_dir, "eips.jsonl"))
+                  for category in ["core", "networking", "interface", "erc", "meta", "informational"]]
+        ),
         "Parsing ontology files": lambda: parse_ontology_files(
             os.path.join(data_dir, "ethereum-glossary.txt"),
             os.path.join(data_dir, "eip-ontology.txt")
@@ -578,11 +605,13 @@ if __name__ == "__main__":
     parser.add_argument("--data-dir", default="data", help="Directory to store data")
     parser.add_argument("--github-token", help="GitHub API token for faster ingestion")
     parser.add_argument("--skip-github", action="store_true", help="Skip GitHub data ingestion")
+    parser.add_argument("--force", action="store_true", help="Force re-download even if files exist")
     
     args = parser.parse_args()
     
     ingest_all_data(
         data_dir=args.data_dir,
         github_token=args.github_token,
-        skip_github=args.skip_github
+        skip_github=args.skip_github,
+        force=args.force
     )
