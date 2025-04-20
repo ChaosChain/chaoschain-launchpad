@@ -363,6 +363,12 @@ def parse_args():
         help='Directory to save the fine-tuned model. If not provided, auto-generates based on model name.'
     )
     
+    parser.add_argument(
+        '--hf-token',
+        type=str,
+        help='Hugging Face token for authentication'
+    )
+    
     return parser.parse_args()
 
 if __name__ == "__main__":
