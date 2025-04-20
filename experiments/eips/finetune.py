@@ -224,29 +224,31 @@ def setup_model(config: ModelConfig, hf_token: str):
     if not hf_token:
         raise ValueError("Please set HUGGING_FACE_TOKEN environment variable")
     
-    model_args = {
-        "torch_dtype": config.dtype,
-        "low_cpu_mem_usage": True,
-        "trust_remote_code": True,
-        "use_cache": False,
-        "token": hf_token  # Add token here
-    }
-    
-    if config.device == "cuda":
-        model_args["device_map"] = "auto"
-    else:
-        model_args["device_map"] = None
-    
     try:
+        # Load tokenizer first
         tokenizer = AutoTokenizer.from_pretrained(
             config.model_name,
             trust_remote_code=True,
             use_fast=False,
             padding_side="right",
-            token=hf_token  # And here
+            token=hf_token
         )
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
+        
+        # Then load model with the tokenizer's vocab size
+        model_args = {
+            "torch_dtype": config.dtype,
+            "low_cpu_mem_usage": True,
+            "trust_remote_code": True,
+            "use_cache": False,
+            "token": hf_token
+        }
+        
+        if config.device == "cuda":
+            model_args["device_map"] = "auto"
+        else:
+            model_args["device_map"] = None
             
         model = AutoModelForCausalLM.from_pretrained(
             config.model_name,
@@ -258,13 +260,9 @@ def setup_model(config: ModelConfig, hf_token: str):
             
     except Exception as e:
         print(f"Error loading model: {e}")
-        print("Attempting to load with safetensors disabled...")
-        model_args["use_safetensors"] = False
-        model = AutoModelForCausalLM.from_pretrained(
-            config.model_name,
-            **model_args
-        )
+        raise e
     
+    # Freeze base model parameters
     for param in model.parameters():
         param.requires_grad = False
     
