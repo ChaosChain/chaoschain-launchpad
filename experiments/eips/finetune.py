@@ -73,8 +73,8 @@ class ModelConfig:
         
         if self.device == "cuda":
             args.update({
-                "per_device_train_batch_size": 2,
-                "gradient_accumulation_steps": 16,
+                "per_device_train_batch_size": 1,
+                "gradient_accumulation_steps": 32,
                 "learning_rate": 5e-5,
                 "bf16": True,
                 "tf32": True,
@@ -115,6 +115,7 @@ class DatasetPreparation:
                 
         dataset = Dataset.from_list(dataset)
         
+        # Format prompts
         dataset = dataset.map(
             lambda x: {
                 'text': (
@@ -126,18 +127,37 @@ class DatasetPreparation:
             }
         )
         
-        dataset = dataset.map(
-            lambda x: self.tokenizer(
-                x['text'],
+        # Tokenize with proper attention mask handling
+        def tokenize_function(examples):
+            tokenized = self.tokenizer(
+                examples['text'],
                 truncation=True,
                 max_length=2048,
-                padding='max_length',
-                return_tensors='pt'
-            ),
-            remove_columns=['text']
+                padding=True,
+                return_tensors=None
+            )
+            
+            # Ensure labels match input_ids for causal LM
+            tokenized['labels'] = tokenized['input_ids'].copy()
+            
+            return tokenized
+        
+        # Apply tokenization
+        tokenized_dataset = dataset.map(
+            tokenize_function,
+            remove_columns=['text'],
+            batched=True,
+            desc="Tokenizing dataset"
         )
         
-        return dataset.train_test_split(test_size=0.05, shuffle=True, seed=42)
+        # Split dataset
+        train_test = tokenized_dataset.train_test_split(
+            test_size=0.05, 
+            shuffle=True, 
+            seed=42
+        )
+        
+        return train_test
 
 def setup_model(config: ModelConfig):
     """Set up the model with LoRA configuration."""
@@ -147,7 +167,8 @@ def setup_model(config: ModelConfig):
     model_args = {
         "torch_dtype": config.dtype,
         "low_cpu_mem_usage": True,
-        "trust_remote_code": True
+        "trust_remote_code": True,
+        "use_cache": False 
     }
     
     if config.device == "cuda":
@@ -159,7 +180,8 @@ def setup_model(config: ModelConfig):
         tokenizer = AutoTokenizer.from_pretrained(
             config.model_name,
             trust_remote_code=True,
-            use_fast=False
+            use_fast=False,
+            padding_side="right"
         )
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
