@@ -48,18 +48,12 @@ Status: {status}""",
         "output_format": "{response}"
     }
 
-def format_training_example(source: str, data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Format a single training example based on its source type.
+def format_training_example(source: str, data: Dict[str, Any]) -> Dict[str, str]:
+    """Format data from different sources into a consistent training example format."""
     
-    Args:
-        source: Type of data ('eip', 'book', or 'discussion')
-        data: Raw data to format
-        
-    Returns:
-        Formatted training example with instruction, input, output, and metadata
-    """
     if source == "eip":
+        content = "\n\n".join(f"## {section}\n{text}" for section, text in data["sections"].items())
+        
         return {
             "instruction": TrainingTemplates.eip_proposal["instruction"],
             "input": TrainingTemplates.eip_proposal["input_format"].format(
@@ -68,28 +62,31 @@ def format_training_example(source: str, data: Dict[str, Any]) -> Dict[str, Any]
                 authors=", ".join(data["authors"]),
                 context=data.get("context", "")
             ),
-            "output": "\n\n".join(f"## {k}\n{v}" for k, v in data["sections"].items()),
+            "output": content,
             "metadata": {
                 "source": "eip",
-                "type": "proposal",
-                "eip_number": data["eip"]
+                "type": data.get("content_type", "proposal"),
+                "eip": data["eip"]
             }
         }
     
     if source == "book":
-        return {
-            "instruction": TrainingTemplates.ethereum_concept["instruction"],
-            "input": TrainingTemplates.ethereum_concept["input_format"].format(
-                title=data["title"],
-                context=data.get("context", "")
-            ),
-            "output": data["content"],
-            "metadata": {
-                "source": "ethereumbook",
-                "chapter": data["chapter"],
-                "section": data["section"]
+        try:
+            return {
+                "instruction": TrainingTemplates.ethereum_concept["instruction"],
+                "input": TrainingTemplates.ethereum_concept["input_format"].format(
+                    title=data.get("title", ""),
+                    context=data.get("context", "")
+                ),
+                "output": data.get("content", ""),
+                "metadata": {
+                    "source": "ethereumbook",
+                    "chapter": data.get("chapter", "unknown"),
+                    "section": data.get("section", "unknown")
+                }
             }
-        }
+        except Exception as e:
+            raise Exception(f"Failed to format book example: {str(e)}, data: {data}")
     
     if source == "discussion":
         return {
