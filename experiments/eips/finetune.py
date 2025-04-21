@@ -216,32 +216,55 @@ class DatasetPreparation:
         
         return train_test
 
-def setup_model(config: ModelConfig):
+def setup_model(config: ModelConfig, hf_token: str):
     """Set up the model with LoRA configuration."""
     
     print(f"\nLoading model {config.model_name}...")
     
-    model_args = {
-        "torch_dtype": config.dtype,
-        "low_cpu_mem_usage": True,
-        "trust_remote_code": True,
-        "use_cache": False 
-    }
-    
-    if config.device == "cuda":
-        model_args["device_map"] = "auto"
-    else:
-        model_args["device_map"] = None
+    if not hf_token:
+        raise ValueError("Please set HUGGING_FACE_TOKEN environment variable")
     
     try:
-        tokenizer = AutoTokenizer.from_pretrained(
-            config.model_name,
-            trust_remote_code=True,
-            use_fast=False,
-            padding_side="right"
-        )
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(
+                config.model_name,
+                trust_remote_code=True,
+                use_fast=False,
+                padding_side="right",
+                token=hf_token
+            )
+        except ImportError as e:
+            if "sentencepiece" in str(e):
+                print("Installing sentencepiece library...")
+                import subprocess
+                subprocess.check_call(["pip", "install", "sentencepiece"])
+                
+                # Retry tokenizer loading
+                tokenizer = AutoTokenizer.from_pretrained(
+                    config.model_name,
+                    trust_remote_code=True,
+                    use_fast=False,
+                    padding_side="right",
+                    token=hf_token
+                )
+            else:
+                raise e
+        
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
+        
+        model_args = {
+            "torch_dtype": config.dtype,
+            "low_cpu_mem_usage": True,
+            "trust_remote_code": True,
+            "use_cache": False,
+            "token": hf_token
+        }
+        
+        if config.device == "cuda":
+            model_args["device_map"] = "auto"
+        else:
+            model_args["device_map"] = None
             
         model = AutoModelForCausalLM.from_pretrained(
             config.model_name,
@@ -253,13 +276,9 @@ def setup_model(config: ModelConfig):
             
     except Exception as e:
         print(f"Error loading model: {e}")
-        print("Attempting to load with safetensors disabled...")
-        model_args["use_safetensors"] = False
-        model = AutoModelForCausalLM.from_pretrained(
-            config.model_name,
-            **model_args
-        )
+        raise e
     
+    # Freeze base model parameters
     for param in model.parameters():
         param.requires_grad = False
     
@@ -277,7 +296,8 @@ def train_model(
     data_path: str = "data/unified_training.jsonl",
     output_dir: str = None,
     model_path: str = None,
-    model_type: str = None
+    model_type: str = None,
+    hf_token: str = None
 ):
     """
     Train the model on the prepared dataset.
@@ -302,7 +322,7 @@ def train_model(
     print(f"Using device: {config.device}")
     print(f"Using dtype: {config.dtype}, fp16: {config.use_fp16}")
     
-    model, tokenizer = setup_model(config)
+    model, tokenizer = setup_model(config, hf_token)
     model.print_trainable_parameters()
     
     dataset_prep = DatasetPreparation(tokenizer)
@@ -357,6 +377,12 @@ def parse_args():
         help='Directory to save the fine-tuned model. If not provided, auto-generates based on model name.'
     )
     
+    parser.add_argument(
+        '--hf-token',
+        type=str,
+        help='Hugging Face token for authentication'
+    )
+    
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -366,5 +392,6 @@ if __name__ == "__main__":
         data_path=args.data_path,
         output_dir=args.output_dir,
         model_path=args.model_path,
-        model_type=args.model_type
+        model_type=args.model_type,
+        hf_token=args.hf_token
     )
